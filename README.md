@@ -126,6 +126,19 @@ techo de resolución propio. Ahora son paths vectoriales con
 `vector-effect="non-scaling-stroke"`, que mantiene la línea con el mismo grosor en
 pantalla a cualquier zoom.
 
+## Por qué el mapa no puede ser más alto
+
+La composición mide 1769 x 1006 unidades, o sea 1,76:1. Mostrando toda España, la
+altura en pantalla queda determinada por el ancho: 222 px en un iPhone de 390. No
+es que otros elementos le roben sitio —quitar la lista no le daría un píxel—, es
+la forma del mapa.
+
+Para ganar altura hay que ocultar ancho y recuperarlo arrastrando: encuadrar en
+la península da +11%, y llenar el 45% de la pantalla exigiría zoom 1,7x ocultando
+el 42% del ancho. Se optó por mantener el encuadre completo, porque ver el país
+entero rellenándose es el sentido del mapa en este juego. Lo que sí se hizo fue
+compactar la cabecera en móvil, para que el mapa suba en la primera pantalla.
+
 ## Herramientas de build
 
 Requieren `pillow` y `numpy`. Solo hay que volver a ejecutarlas si cambia

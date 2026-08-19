@@ -78,10 +78,6 @@ input:focus{
 
 .map {
 	position: relative;
-	margin-top: 15px;
-	margin-bottom: 15px;
-	margin-left: 15px;
-	margin-right: 15px;
 }
 
 .selected {
@@ -500,4 +496,33 @@ button, select, input, textarea {
 .installHint.hidden,
 .modalBackdrop.hidden {
 	display: none;
+}
+
+/* --- first-screen breathing room ----------------------------------------- */
+
+/* The map's height is locked to its aspect ratio, so it cannot simply grow. What
+   it can do is sit higher up: on a phone the heading was taking three lines of
+   the first screen before the map even started. */
+.mapViewport {
+	margin-top: 8px;
+	margin-bottom: 4px;
+}
+
+@media (max-width: 520px) {
+	h1 {
+		font-size: 1rem;
+		line-height: 1.25;
+		padding-top: 8px;
+		margin-top: 0;
+		margin-bottom: 2px;
+	}
+
+	.mapHint {
+		font-size: 11px;
+		margin-bottom: 2px;
+	}
+
+	.sendWrapper {
+		margin-bottom: 2px;
+	}
 }
