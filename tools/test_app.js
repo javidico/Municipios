@@ -99,17 +99,31 @@ window.fetch = async (input) => {
 	return new Response(fs.readFileSync(file, 'utf8'), {status: 200});
 };
 
-// Layout, which jsdom does not compute. The zoom maths is all in these numbers,
-// so without them commit() bails out and nothing can be verified.
+// Layout and scrolling, neither of which jsdom computes. The zoom maths lives
+// entirely in these numbers, so they have to track what the code writes: it sets
+// style.width and then reads offsetWidth back.
 const VIEW_W = 390;                                 // a phone's CSS width
-const VIEW_H = Math.round(390 * 1006.6781 / 1769.1083);
+const ASPECT = 1006.6781 / 1769.1083;
+const VIEW_H = VIEW_W * ASPECT;
 function stubLayout() {
 	const viewport = window.document.getElementById('mapViewport');
 	const map = window.document.getElementById('mapSvg');
-	Object.defineProperty(viewport, 'clientWidth', {value: VIEW_W});
-	Object.defineProperty(viewport, 'clientHeight', {value: VIEW_H});
-	Object.defineProperty(map, 'offsetWidth', {value: VIEW_W});
-	Object.defineProperty(map, 'offsetHeight', {value: VIEW_H});
+	const px = (value, fallback) => {
+		const n = parseFloat(value);
+		return Number.isFinite(n) ? n : fallback;
+	};
+	Object.defineProperty(viewport, 'clientWidth', {get: () => VIEW_W});
+	Object.defineProperty(viewport, 'clientHeight',
+		{get: () => px(viewport.style.height, VIEW_H)});
+	Object.defineProperty(map, 'offsetWidth',
+		{get: () => px(map.style.width, VIEW_W)});
+	Object.defineProperty(map, 'offsetHeight',
+		{get: () => px(map.style.height, VIEW_H)});
+	let left = 0, top = 0;
+	Object.defineProperty(viewport, 'scrollLeft',
+		{get: () => left, set: v => { left = v; }});
+	Object.defineProperty(viewport, 'scrollTop',
+		{get: () => top, set: v => { top = v; }});
 }
 
 // A real IndexedDB, so the mirror and the recovery path are genuinely exercised.
@@ -423,8 +437,7 @@ test('Borrar does not duplicate listeners', () => {
 			'fallback threw: ' + pageErrors.slice(before));
 	});
 
-	console.log('\nmap zoom commits to the viewBox (so it stays sharp)');
-	const VB = {w: 1769.1083, h: 1006.6781};
+	console.log('\nmap zoom and pan');
 	const viewportEl = doc.getElementById('mapViewport');
 	const mapEl = doc.getElementById('mapSvg');
 
@@ -435,78 +448,112 @@ test('Borrar does not duplicate listeners', () => {
 		});
 		viewportEl.dispatchEvent(event);
 	}
-	function viewBoxOf() {
-		const vb = doc.querySelector('#mapSvg svg').getAttribute('viewBox');
-		return vb.trim().split(/\s+/).map(Number);
-	}
-
-	await testAsync('starts at the full map with no transform', async () => {
-		window.resetMapZoom();
-		const [x, y, w, h] = viewBoxOf();
-		assert.ok(Math.abs(w - VB.w) < 0.01 && Math.abs(h - VB.h) < 0.01,
-			'expected the natural viewBox, got ' + viewBoxOf().join(' '));
-		assert.strictEqual(x, 0);
-		assert.strictEqual(y, 0);
-		assert.strictEqual(window.mapZoomState().zoom, 1);
-	});
-
-	await testAsync('a 2x pinch halves the viewBox and keeps the centre put', async () => {
-		// Two fingers 111.8px apart, then spread to exactly twice that, with the
-		// midpoint pinned to the centre of the viewport.
+	// Two fingers 111.8px apart centred on the viewport, spread to exactly twice
+	// that distance: a clean 2x pinch about the centre.
+	function pinchTo2x() {
 		touch('touchstart', [[145, 86], [245, 136]]);
 		touch('touchmove', [[95, 61], [295, 161]]);
-		assert.ok(Math.abs(window.mapZoomState().scale - 2) < 0.001,
-			'gesture scale is ' + window.mapZoomState().scale);
 		touch('touchend', []);
+	}
 
-		const [x, y, w, h] = viewBoxOf();
-		assert.ok(Math.abs(w - VB.w / 2) < 0.5,
-			'viewBox width should halve; got ' + w + ' of ' + VB.w);
-		assert.ok(Math.abs(h - VB.h / 2) < 0.5, 'viewBox height should halve; got ' + h);
-		// The map point under the viewport centre must not move.
-		assert.ok(Math.abs((x + w / 2) - VB.w / 2) < 1.0,
-			'centre drifted in x: ' + (x + w / 2) + ' vs ' + VB.w / 2);
-		assert.ok(Math.abs((y + h / 2) - VB.h / 2) < 1.0,
-			'centre drifted in y: ' + (y + h / 2) + ' vs ' + VB.h / 2);
+	await testAsync('starts at the full map, nothing to scroll', async () => {
+		window.resetMapZoom();
+		const s = window.mapZoomState();
+		assert.strictEqual(s.zoom, 1);
+		assert.ok(Math.abs(s.width - VIEW_W) < 0.01,
+			'map should start exactly viewport-wide, got ' + s.width);
+		assert.strictEqual(s.maxScrollX, 0);
+		assert.strictEqual(s.maxScrollY, 0);
 	});
 
-	await testAsync('the CSS transform is dropped once committed', async () => {
-		// This is the whole point: a lingering transform means the browser keeps
-		// showing a scaled bitmap instead of re-rendering the vector.
+	await testAsync('the svg viewBox is left alone, so the vector stays whole', async () => {
+		// Zoom grows the svg's CSS box instead of narrowing its viewBox. Narrowing
+		// it would mean the svg only paints that region, and panning would then
+		// reveal blank space rather than the neighbouring part of the country.
+		const vb = doc.querySelector('#mapSvg svg').getAttribute('viewBox');
+		assert.ok(/^0 0 1769\.\d+ 1006\.\d+$/.test(vb.trim()),
+			'viewBox was rewritten to "' + vb + '"');
+	});
+
+	await testAsync('a 2x pinch doubles the map box', async () => {
+		pinchTo2x();
+		const s = window.mapZoomState();
+		assert.ok(Math.abs(s.zoom - 2) < 0.001, 'zoom is ' + s.zoom);
+		assert.ok(Math.abs(s.width - VIEW_W * 2) < 0.01,
+			'map width should be ' + VIEW_W * 2 + ', got ' + s.width);
+		assert.ok(Math.abs(s.height - VIEW_W * 2 * ASPECT) < 0.01,
+			'map height should keep the aspect, got ' + s.height);
+	});
+
+	await testAsync('zoomed in, the map can be panned SIDEWAYS', async () => {
+		// The regression this replaces: panning was applied as a CSS transform and
+		// then clamped against a container of exactly the same width, so the offset
+		// was forced back to zero on every move and the map never budged.
+		const s = window.mapZoomState();
+		assert.ok(s.maxScrollX > 0,
+			'there is no horizontal room to pan: maxScrollX=' + s.maxScrollX);
+		assert.ok(Math.abs(s.maxScrollX - VIEW_W) < 0.01,
+			'expected ' + VIEW_W + 'px of horizontal travel, got ' + s.maxScrollX);
+		assert.ok(s.maxScrollY > 0, 'no vertical room either: ' + s.maxScrollY);
+
+		// And the scroll offset actually moves and sticks.
+		viewportEl.scrollLeft = 123;
+		assert.strictEqual(window.mapZoomState().scrollLeft, 123,
+			'the horizontal offset did not stick');
+	});
+
+	await testAsync('the pinch keeps the focal point under the fingers', async () => {
+		window.resetMapZoom();
+		pinchTo2x();
+		const s = window.mapZoomState();
+		// Pinching about the centre at 2x should leave the centre showing the
+		// centre, which means scrolling half a viewport in each direction.
+		assert.ok(Math.abs(s.scrollLeft - VIEW_W / 2) < 0.5,
+			'expected scrollLeft ' + VIEW_W / 2 + ', got ' + s.scrollLeft);
+		assert.ok(Math.abs(s.scrollTop - VIEW_H / 2) < 0.5,
+			'expected scrollTop ' + VIEW_H / 2 + ', got ' + s.scrollTop);
+	});
+
+	await testAsync('the transform preview is dropped once committed', async () => {
+		// A lingering transform means the browser keeps showing a scaled bitmap
+		// instead of re-rendering the vector at the new size.
 		assert.strictEqual(mapEl.style.transform, '',
 			'transform still set to "' + mapEl.style.transform + '"');
-		const state = window.mapZoomState();
-		assert.strictEqual(state.scale, 1);
-		assert.strictEqual(state.tx, 0);
-		assert.strictEqual(state.ty, 0);
-		assert.ok(Math.abs(state.zoom - 2) < 0.01, 'total zoom is ' + state.zoom);
-	});
-
-	await testAsync('will-change is not left pinned after the gesture', async () => {
 		assert.strictEqual(viewportEl.classList.contains('gesturing'), false,
 			'the gesturing class survived, so the layer stays rasterised');
 	});
 
+	await testAsync('one finger is left to the browser to scroll with', async () => {
+		// A single-finger touchstart must not be intercepted: native scrolling is
+		// what pans the map now, and preventDefault would kill it.
+		let prevented = false;
+		const event = new window.Event('touchstart', {bubbles: true, cancelable: true});
+		Object.defineProperty(event, 'touches', {value: [{clientX: 200, clientY: 110}]});
+		event.preventDefault = () => { prevented = true; };
+		viewportEl.dispatchEvent(event);
+		assert.strictEqual(prevented, false,
+			'a one-finger drag was intercepted, which stops the map panning');
+	});
+
 	await testAsync('zoom cannot go below the full map', async () => {
-		// Pinch inwards hard from the 2x view: it must stop at the whole map.
 		touch('touchstart', [[145, 86], [245, 136]]);
 		touch('touchmove', [[190, 108], [200, 114]]);
 		touch('touchend', []);
-		const [x, y, w, h] = viewBoxOf();
-		assert.ok(w <= VB.w + 0.01, 'viewBox grew past the map: ' + w);
-		assert.ok(x >= -0.01 && y >= -0.01, 'panned outside the map: ' + x + ',' + y);
-		assert.ok(window.mapZoomState().zoom >= 1 - 1e-9);
+		const s = window.mapZoomState();
+		assert.ok(s.zoom >= 1 - 1e-9, 'zoom fell below 1: ' + s.zoom);
+		assert.ok(Math.abs(s.width - VIEW_W) < 0.01,
+			'map should be back to viewport width, got ' + s.width);
+		assert.strictEqual(s.scrollLeft, 0);
 	});
 
 	await testAsync('double tap returns to the full map', async () => {
-		touch('touchstart', [[145, 86], [245, 136]]);
-		touch('touchmove', [[95, 61], [295, 161]]);
-		touch('touchend', []);
+		pinchTo2x();
 		assert.ok(window.mapZoomState().zoom > 1.5, 'setup failed to zoom in');
 		touch('touchend', []);
 		touch('touchend', []);
-		const [x, y, w, h] = viewBoxOf();
-		assert.ok(Math.abs(w - VB.w) < 0.01, 'double tap did not reset; w=' + w);
+		const s = window.mapZoomState();
+		assert.strictEqual(s.zoom, 1, 'double tap did not reset');
+		assert.strictEqual(s.maxScrollX, 0);
 		assert.strictEqual(mapEl.style.transform, '');
 	});
 
@@ -516,9 +563,10 @@ test('Borrar does not duplicate listeners', () => {
 			touch('touchmove', [[45, 36], [345, 186]]);
 			touch('touchend', []);
 		}
-		const zoom = window.mapZoomState().zoom;
-		assert.ok(zoom <= 14.001, 'zoom ran past the cap: ' + zoom);
-		assert.ok(zoom > 10, 'zoom should have reached the cap, got ' + zoom);
+		const s = window.mapZoomState();
+		assert.ok(s.zoom <= 14.001, 'zoom ran past the cap: ' + s.zoom);
+		assert.ok(s.zoom > 10, 'zoom should have reached the cap, got ' + s.zoom);
+		assert.ok(Math.abs(s.width - VIEW_W * s.zoom) < 0.01, 'box out of step with zoom');
 		window.resetMapZoom();
 	});
 

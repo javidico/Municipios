@@ -226,157 +226,82 @@ function setupDataModal() {
 	});
 }
 
-/* --- map pinch zoom ------------------------------------------------------- */
+/* --- map pinch zoom and pan ----------------------------------------------- */
 
-// Zoom happens in two stages, because neither one alone works well here.
+// The map is zoomed by growing the svg's CSS box while its viewBox stays the
+// whole country. The vector is then rendered at the larger size, so it is sharp
+// at any magnification, and the viewport simply clips it.
 //
-// A CSS transform is cheap and smooth, but the browser rasterises the layer once
-// and then scales that bitmap, so the map goes soft exactly when you magnify it
-// to read a small municipio. Rewriting the SVG viewBox instead re-renders the
-// vector at full resolution and stays perfectly sharp, but it repaints 13,904
-// paths, which is far too slow for every frame of a pinch.
+// Panning is the browser's own scrolling. That matters for more than tidiness:
+// panning with a transform cannot work here, because the svg only paints what
+// its viewBox covers, so sliding it sideways reveals blank space rather than the
+// neighbouring part of Spain. Native scrolling also brings momentum and
+// edge-handoff to the page for free.
 //
-// So: transform during the gesture, then commit the equivalent viewBox once the
-// fingers come up. Sharp whenever you are actually looking at it.
+// A pinch still uses a transform while the fingers are down -- resizing the box
+// mid-gesture would relayout and repaint 13,904 paths every frame -- and commits
+// to a real size on release.
 function setupMapZoom() {
 	var viewport = document.getElementById("mapViewport");
 	var map = document.getElementById("mapSvg");
 	if (!viewport || !map) return;
 
 	var MAX_ZOOM = 14;
-	var natural = null;              // the map's own viewBox
-	var view = null;                 // the committed viewBox, in map units
-	var scale = 1, tx = 0, ty = 0;   // gesture transform, on top of `view`
+	var zoom = 1;
+	var aspect = null;    // viewBox height / width
 	var pinch = null;
-	var pan = null;
 	var lastTap = 0;
 	var wheelTimer = null;
 
-	function svgEl() {
-		return map.querySelector("svg");
+	function readAspect() {
+		if (aspect) return aspect;
+		var svg = map.querySelector("svg");
+		if (!svg) return null;
+		var vb = svg.viewBox.baseVal;
+		if (!vb || !vb.width) return null;
+		aspect = vb.height / vb.width;
+		return aspect;
 	}
 
-	// Resolved lazily: the svg only exists once drawMap() has run, and drawMap
-	// replaces it wholesale on every redraw.
-	function sync() {
-		var svg = svgEl();
-		if (!svg) return false;
-		var vb = svg.viewBox.baseVal;
-		if (!vb || !vb.width) return false;
-		if (!natural) {
-			natural = {x: vb.x, y: vb.y, w: vb.width, h: vb.height};
-			view = {x: vb.x, y: vb.y, w: vb.width, h: vb.height};
-			return true;
-		}
-		// A redraw hands back a pristine svg carrying the original viewBox. Detect
-		// that by the viewBox no longer matching the committed view and start over
-		// from the full map rather than leaving the two out of step.
-		if (Math.abs(vb.width - view.w) > 1e-6 || Math.abs(vb.x - view.x) > 1e-6) {
-			if (Math.abs(vb.width - natural.w) < 1e-6) {
-				view = {x: vb.x, y: vb.y, w: vb.width, h: vb.height};
-				scale = 1; tx = 0; ty = 0;
-				map.style.transform = "";
-				viewport.classList.remove("zoomed");
-			}
-		}
+	// The viewport keeps the unzoomed map's shape; the map inside it grows.
+	function relayout() {
+		if (!readAspect()) return false;
+		var base = viewport.clientWidth;
+		if (!base) return false;
+		viewport.style.height = (base * aspect) + "px";
+		map.style.width = (base * zoom) + "px";
+		map.style.height = (base * zoom * aspect) + "px";
+		viewport.classList.toggle("zoomed", zoom > 1.001);
 		return true;
 	}
 
-	function totalZoom() {
-		return view ? natural.w / view.w : 1;
+	function maxScrollX() {
+		return Math.max(0, map.offsetWidth - viewport.clientWidth);
 	}
 
-	function minGestureScale() {
-		return 1 / totalZoom();          // cannot zoom out past the full map
+	function maxScrollY() {
+		return Math.max(0, map.offsetHeight - viewport.clientHeight);
 	}
 
-	function maxGestureScale() {
-		return MAX_ZOOM / totalZoom();
+	function scrollTo(x, y) {
+		viewport.scrollLeft = Math.max(0, Math.min(maxScrollX(), x));
+		viewport.scrollTop = Math.max(0, Math.min(maxScrollY(), y));
 	}
 
-	function clampTransform() {
-		var lo = minGestureScale(), hi = maxGestureScale();
-		if (scale < lo) scale = lo;
-		if (scale > hi) scale = hi;
-		var vw = viewport.clientWidth;
-		var vh = viewport.clientHeight;
-		var cw = map.offsetWidth * scale;
-		var ch = map.offsetHeight * scale;
-		tx = cw <= vw ? (vw - cw) / 2 : Math.min(0, Math.max(vw - cw, tx));
-		ty = ch <= vh ? (vh - ch) / 2 : Math.min(0, Math.max(vh - ch, ty));
-	}
-
-	function applyTransform() {
-		clampTransform();
-		map.style.transform = "translate(" + tx + "px, " + ty + "px) scale(" + scale + ")";
-		viewport.classList.toggle("zoomed", totalZoom() * scale > 1.001);
-	}
-
-	function writeViewBox() {
-		var svg = svgEl();
-		if (!svg) return;
-		svg.setAttribute("viewBox",
-			view.x + " " + view.y + " " + view.w + " " + view.h);
-	}
-
-	// Fold the gesture transform into the viewBox and drop the transform, so the
-	// vector is re-rendered at the new scale instead of being a scaled bitmap.
-	function commit() {
-		if (!sync()) return;
-		var w = map.offsetWidth;
-		var h = map.offsetHeight;
-		if (!w || !h || scale === 1 && tx === 0 && ty === 0) {
-			map.style.transform = "";
-			return;
-		}
-
-		var fx = view.w / w;             // map units per layout pixel
-		var fy = view.h / h;
-		view = {
-			x: view.x - (tx / scale) * fx,
-			y: view.y - (ty / scale) * fy,
-			w: view.w / scale,
-			h: view.h / scale
-		};
-
-		// Never wider than the whole map, never narrower than the zoom cap.
-		if (view.w > natural.w) {
-			view.w = natural.w;
-			view.h = natural.h;
-		}
-		var minW = natural.w / MAX_ZOOM;
-		if (view.w < minW) {
-			var k = minW / view.w;
-			view.w *= k;
-			view.h *= k;
-		}
-		view.x = Math.max(natural.x, Math.min(natural.x + natural.w - view.w, view.x));
-		view.y = Math.max(natural.y, Math.min(natural.y + natural.h - view.h, view.y));
-
-		scale = 1; tx = 0; ty = 0;
-		writeViewBox();
-		map.style.transform = "";
-		viewport.classList.toggle("zoomed", totalZoom() > 1.001);
+	// Change the zoom, keeping the content under (fx, fy) -- viewport coordinates
+	// -- exactly where it is.
+	function zoomTo(next, fx, fy, scroll0) {
+		var target = Math.max(1, Math.min(MAX_ZOOM, next));
+		var k = target / zoom;
+		zoom = target;
+		if (!relayout()) return;
+		scrollTo((scroll0.x + fx) * k - fx, (scroll0.y + fy) * k - fy);
 	}
 
 	function reset() {
-		if (!sync()) return;
-		view = {x: natural.x, y: natural.y, w: natural.w, h: natural.h};
-		scale = 1; tx = 0; ty = 0;
-		writeViewBox();
+		zoom = 1;
 		map.style.transform = "";
-		viewport.classList.remove("zoomed");
-	}
-
-	function beginGesture() {
-		// will-change is set only while a gesture runs: left on permanently it pins
-		// a rasterised layer and the map never sharpens back up.
-		viewport.classList.add("gesturing");
-	}
-
-	function endGesture() {
-		viewport.classList.remove("gesturing");
-		commit();
+		if (relayout()) scrollTo(0, 0);
 	}
 
 	function distance(a, b) {
@@ -384,7 +309,7 @@ function setupMapZoom() {
 		return Math.sqrt(dx * dx + dy * dy);
 	}
 
-	function midpoint(a, b) {
+	function focalPoint(a, b) {
 		var box = viewport.getBoundingClientRect();
 		return {
 			x: (a.clientX + b.clientX) / 2 - box.left,
@@ -392,91 +317,117 @@ function setupMapZoom() {
 		};
 	}
 
+	function beginPinch(a, b) {
+		// overflow is frozen for the duration so the scroll offset cannot drift
+		// under the transform, and will-change is only set here: left on
+		// permanently it pins a rasterised layer and the map never sharpens up.
+		viewport.classList.add("gesturing");
+		var focus = focalPoint(a, b);
+		pinch = {
+			d0: distance(a, b) || 1,
+			focus: focus,
+			scroll: {x: viewport.scrollLeft, y: viewport.scrollTop},
+			scale: 1
+		};
+	}
+
+	function updatePinch(a, b) {
+		if (!pinch) return;
+		var raw = distance(a, b) / pinch.d0;
+		// Bound the preview to the same range the commit will allow, so the
+		// gesture cannot show something that then snaps back.
+		var lo = 1 / zoom, hi = MAX_ZOOM / zoom;
+		pinch.scale = Math.max(lo, Math.min(hi, raw));
+
+		// Hold the focal point still: content coordinate c renders at
+		// c * s + t - scroll, and we want the focal content point back at focus.
+		var s = pinch.scale;
+		var tx = pinch.focus.x + pinch.scroll.x - (pinch.scroll.x + pinch.focus.x) * s;
+		var ty = pinch.focus.y + pinch.scroll.y - (pinch.scroll.y + pinch.focus.y) * s;
+		map.style.transform = "translate(" + tx + "px, " + ty + "px) scale(" + s + ")";
+	}
+
+	function endPinch() {
+		viewport.classList.remove("gesturing");
+		if (!pinch) return;
+		var p = pinch;
+		pinch = null;
+		map.style.transform = "";
+		zoomTo(zoom * p.scale, p.focus.x, p.focus.y, p.scroll);
+	}
+
 	viewport.addEventListener("touchstart", function(event) {
-		if (!sync()) return;
 		if (event.touches.length === 2) {
 			event.preventDefault();
-			beginGesture();
-			var m = midpoint(event.touches[0], event.touches[1]);
-			pinch = {
-				d0: distance(event.touches[0], event.touches[1]) || 1,
-				s0: scale,
-				px: (m.x - tx) / scale,
-				py: (m.y - ty) / scale
-			};
-			pan = null;
-		} else if (event.touches.length === 1 && totalZoom() * scale > 1.001) {
-			event.preventDefault();
-			beginGesture();
-			pan = {x: event.touches[0].clientX, y: event.touches[0].clientY, tx: tx, ty: ty};
+			beginPinch(event.touches[0], event.touches[1]);
 		}
+		// One finger is deliberately left alone: that is the browser scrolling the
+		// viewport, which is what pans the map.
 	}, {passive: false});
 
 	viewport.addEventListener("touchmove", function(event) {
 		if (pinch && event.touches.length === 2) {
 			event.preventDefault();
-			var m = midpoint(event.touches[0], event.touches[1]);
-			var next = pinch.s0 * (distance(event.touches[0], event.touches[1]) / pinch.d0);
-			scale = Math.min(maxGestureScale(), Math.max(minGestureScale(), next));
-			tx = m.x - pinch.px * scale;
-			ty = m.y - pinch.py * scale;
-			applyTransform();
-		} else if (pan && event.touches.length === 1) {
-			event.preventDefault();
-			tx = pan.tx + (event.touches[0].clientX - pan.x);
-			ty = pan.ty + (event.touches[0].clientY - pan.y);
-			applyTransform();
+			updatePinch(event.touches[0], event.touches[1]);
 		}
 	}, {passive: false});
 
 	viewport.addEventListener("touchend", function(event) {
+		if (pinch && event.touches.length < 2) {
+			endPinch();
+			lastTap = 0;
+			return;
+		}
 		if (event.touches.length === 0) {
-			var wasGesture = pinch !== null || pan !== null;
 			var now = Date.now();
-			pinch = null;
-			pan = null;
-			if (wasGesture) {
-				endGesture();
-			} else if (now - lastTap < 300) {
-				// Double tap anywhere on the map returns to the full view.
+			// Double tap anywhere on the map returns to the full view.
+			if (now - lastTap < 300) {
 				reset();
 				lastTap = 0;
-				return;
+			} else {
+				lastTap = now;
 			}
-			lastTap = now;
-		} else if (event.touches.length === 1 && pinch) {
-			// Lifting one finger of a pinch hands over to a one-finger pan.
-			pinch = null;
-			pan = {x: event.touches[0].clientX, y: event.touches[0].clientY, tx: tx, ty: ty};
 		}
+	});
+
+	viewport.addEventListener("touchcancel", function() {
+		if (pinch) endPinch();
 	});
 
 	// Ctrl/Cmd + wheel zoom, so the same code path is reachable on a desktop.
 	viewport.addEventListener("wheel", function(event) {
 		if (!event.ctrlKey && !event.metaKey) return;
-		if (!sync()) return;
 		event.preventDefault();
-		beginGesture();
 		var box = viewport.getBoundingClientRect();
-		var mx = event.clientX - box.left, my = event.clientY - box.top;
-		var px = (mx - tx) / scale, py = (my - ty) / scale;
-		var next = scale * (event.deltaY < 0 ? 1.12 : 1 / 1.12);
-		scale = Math.min(maxGestureScale(), Math.max(minGestureScale(), next));
-		tx = mx - px * scale;
-		ty = my - py * scale;
-		applyTransform();
-		// A wheel has no natural end, so settle shortly after it stops moving.
+		var fx = event.clientX - box.left;
+		var fy = event.clientY - box.top;
+		var scroll = {x: viewport.scrollLeft, y: viewport.scrollTop};
+		zoomTo(zoom * (event.deltaY < 0 ? 1.12 : 1 / 1.12), fx, fy, scroll);
 		if (wheelTimer) clearTimeout(wheelTimer);
-		wheelTimer = setTimeout(function() { wheelTimer = null; endGesture(); }, 180);
+		wheelTimer = setTimeout(function() { wheelTimer = null; }, 180);
 	}, {passive: false});
 
 	window.addEventListener("resize", function() {
-		if (sync()) applyTransform();
+		// Keep the zoom level, resize the boxes to the new width, and pull the
+		// scroll offset back inside the new bounds.
+		var scroll = {x: viewport.scrollLeft, y: viewport.scrollTop};
+		if (relayout()) scrollTo(scroll.x, scroll.y);
 	});
+
+	relayout();
 
 	window.resetMapZoom = reset;
 	window.mapZoomState = function() {
-		return {natural: natural, view: view, scale: scale, tx: tx, ty: ty,
-			zoom: totalZoom()};
+		return {
+			zoom: zoom,
+			width: map.offsetWidth,
+			height: map.offsetHeight,
+			viewportWidth: viewport.clientWidth,
+			scrollLeft: viewport.scrollLeft,
+			scrollTop: viewport.scrollTop,
+			maxScrollX: maxScrollX(),
+			maxScrollY: maxScrollY(),
+			transform: map.style.transform
+		};
 	};
 }

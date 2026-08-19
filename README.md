@@ -107,10 +107,19 @@ Dos cosas limitaban la calidad al hacer zoom, y ambas están resueltas.
 
 **El zoom rasterizaba.** `will-change: transform` promocionaba el mapa a una capa
 de composición rasterizada a la escala inicial, así que ampliar escalaba ese
-bitmap en vez de re-renderizar el vector. Ahora el gesto usa `transform` (fluido,
-por GPU) y al levantar los dedos se **traslada el zoom al `viewBox` del SVG**, que
-fuerza un re-render vectorial a resolución completa. Nítido siempre que estás
-mirándolo, que es cuando importa; solo el propio gesto usa el camino rápido.
+bitmap en vez de re-renderizar el vector. Ahora el zoom **agranda la caja CSS del
+SVG** manteniendo su `viewBox`, de modo que el vector se re-renderiza al tamaño
+nuevo y queda nítido a cualquier aumento. Durante el pellizco sí se usa un
+`transform` como vista previa —redimensionar la caja en cada frame relayoutearía y
+repintaría 13.904 paths— y al soltar se confirma el tamaño real.
+
+**El desplazamiento es el scroll nativo del navegador.** No es solo por
+comodidad: arrastrar con `transform` no puede funcionar aquí, porque el SVG solo
+pinta lo que cubre su `viewBox`, así que moverlo de lado revelaría hueco vacío en
+vez del trozo de país contiguo. Ese fue justo el fallo de la primera versión, que
+además clampaba el desplazamiento contra un contenedor del mismo ancho y lo
+forzaba a cero. Con scroll nativo salen gratis la inercia y el traspaso al scroll
+de la página al llegar al borde.
 
 **El overlay de fronteras era un PNG** de 3538 px estirado sobre el mapa, con
 techo de resolución propio. Ahora son paths vectoriales con
@@ -211,15 +220,17 @@ node tools/test_storage.js quiz-municipios   # 28 pruebas de la capa de datos
 node tools/test_sw.js quiz-municipios        # 12 pruebas del service worker
 npm install jsdom fake-indexeddb             # solo para los dos siguientes
 node tools/test_css.js quiz-municipios       #  4 pruebas de cascada CSS
-node tools/test_app.js quiz-municipios       # 41 pruebas de la app completa
+node tools/test_app.js quiz-municipios       # 44 pruebas de la app completa
 ```
 
 El test de integración arranca `index.html` de verdad en jsdom con los 16 MB de
 mapa y los 8.481 municipios, y comprueba aciertos, normalización de acentos,
 duplicados, las ocho ordenaciones, exportar/importar, Borrar, la recuperación del
-progreso tras un borrado de `localStorage`, y la matemática del zoom: que un
-pinch de 2x divide el `viewBox` por dos sin desplazar el centro, que el
-`transform` se suelta al confirmar y que el zoom está acotado en ambos extremos.
+progreso tras un borrado de `localStorage`, y la mecánica del zoom: que un pinch
+de 2x duplica la caja del mapa, que **queda sitio real para desplazarse en
+horizontal**, que el punto focal no se mueve bajo los dedos, que el `transform` se
+suelta al confirmar y que un toque de un solo dedo no se intercepta —si se
+interceptara, el mapa dejaría de desplazarse.
 
 `test_sw.js` es el que cubre lo de arriba contra un mock de la Cache API:
 comprueba que un redespliegue del shell entra solo, que los 17 MB no se vuelven

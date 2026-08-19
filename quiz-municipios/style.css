@@ -280,20 +280,43 @@ button, select, input, textarea {
 
 .mapViewport {
 	width: 100%;
-	overflow: hidden;
 	position: relative;
-	/* pan-y leaves vertical page scrolling alone while still denying the browser
-	   its own pinch-zoom, which the map handles itself. */
-	touch-action: pan-y;
+	/* Panning the zoomed map IS scrolling this box. A transform cannot do the job:
+	   the svg only paints what its viewBox covers, so sliding it sideways would
+	   reveal blank space instead of the next bit of the country. */
+	overflow: auto;
+	overscroll-behavior: contain;
+	-webkit-overflow-scrolling: touch;
+	/* Both axes pan natively; naming them still denies the browser its own
+	   pinch-zoom, which the map handles itself. */
+	touch-action: pan-x pan-y;
+	/* Scrollbars are noise on a map, and on desktop they would eat into
+	   clientWidth, which is the number the zoom maths is built on. */
+	scrollbar-width: none;
 }
 
-/* Once zoomed in, the map owns every gesture so one finger pans it. */
-.mapViewport.zoomed {
+.mapViewport::-webkit-scrollbar {
+	display: none;
+}
+
+/* While two fingers are down the transform preview drives the view, so the
+   scroll offset is frozen and every gesture belongs to the map. */
+.mapViewport.gesturing {
+	overflow: hidden;
 	touch-action: none;
 }
 
 .map {
 	transform-origin: 0 0;
+}
+
+/* The svg fills whatever box .map is sized to, and its viewBox stays the whole
+   country, so growing that box re-renders the vector larger instead of scaling a
+   bitmap. This is what keeps the map sharp when magnified. */
+.map svg {
+	display: block;
+	width: 100%;
+	height: 100%;
 }
 
 /* will-change only while a gesture is in flight. Left on permanently it promotes
