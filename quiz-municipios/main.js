@@ -4,6 +4,11 @@ const BIG_CITY_POPULATION = 100000
 const MEDIUM_CITY_POPULATION = 20000
 const REGIONS = ['spain', 'madrid', 'murcia', 'cadiz'];
 
+// Built once and reused: constructing a collator per comparison is far slower,
+// and Spanish collation matters here. A plain < would sort every accented name
+// after Z ("Ávila" after "Zamora") and mis-file ñ.
+const nameCollator = new Intl.Collator('es');
+
 // A factory rather than a shared constant: the old code assigned one object to
 // `state`, so the first guess mutated the "initial" value it was supposed to be
 // able to fall back to.
@@ -319,6 +324,14 @@ function drawMunicipiosList() {
 }
 
 function getSortedMunicipios() {
+	if (sortingStrategy === 'name-asc')
+		return state[provincia]
+			.map(m => {return {name: municipios[provincia][m].name}})
+			.toSorted((a, b) => nameCollator.compare(a.name, b.name))
+	if (sortingStrategy === 'name-desc')
+		return state[provincia]
+			.map(m => {return {name: municipios[provincia][m].name}})
+			.toSorted((a, b) => nameCollator.compare(b.name, a.name))
 	if (sortingStrategy === 'order-asc')
 		return state[provincia]
 			.map(m => {return {name: municipios[provincia][m].name}})

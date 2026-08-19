@@ -191,6 +191,62 @@ test('population sort orders correctly', () => {
 	assert.match(items[0], /\(/, 'expected the population in parentheses');
 });
 
+console.log('\nalphabetical sorting');
+function sortBy(value) {
+	$('selectSorting').value = value;
+	$('selectSorting').dispatchEvent(new window.Event('change'));
+	return [...$('municipiosList').querySelectorAll('li')].map(li => li.textContent);
+}
+
+test('the default sort is still the original one', () => {
+	assert.strictEqual($('selectSorting').querySelector('option').value, 'order-desc',
+		'the first option decides the default sort; it must not change silently');
+});
+test('name-asc puts the list in A-Z order', () => {
+	// Deliberately spans accents, ñ and case.
+	['Zamora', 'Ávila', 'Añora', 'Aoiz', 'Alcañiz', 'ólvega', 'Badajoz'].forEach(n => guess(n));
+	const items = sortBy('name-asc');
+	const expected = [...items].sort((a, b) => new Intl.Collator('es').compare(a, b));
+	assert.deepStrictEqual(items, expected);
+});
+test('accents sort with their base letter, not after Z', () => {
+	const items = sortBy('name-asc');
+	const avila = items.indexOf('Ávila');
+	const badajoz = items.indexOf('Badajoz');
+	const zamora = items.indexOf('Zamora');
+	assert.ok(avila !== -1 && badajoz !== -1 && zamora !== -1,
+		'missing test municipios: ' + items.join(', '));
+	assert.ok(avila < badajoz, 'Ávila should precede Badajoz, got ' + items.join(', '));
+	assert.ok(avila < zamora, 'Ávila sorted after Zamora, so collation is byte order');
+});
+test('ñ sorts before o, which raw string comparison gets wrong', () => {
+	// This is the pair that actually proves Spanish collation is in use. In
+	// Spanish n < ñ < o, but by code unit o is U+006F and ñ is U+00F1, so a plain
+	// `<` puts Aoiz first. An n-vs-ñ pair would NOT catch it: both orderings
+	// agree there, so it would pass with a broken comparator.
+	const items = sortBy('name-asc');
+	const anora = items.findIndex(n => n.startsWith('Añora'));
+	const aoiz = items.findIndex(n => n.startsWith('Aoiz'));
+	assert.ok(anora !== -1, 'Añora never made it into the list: ' + items.join(', '));
+	assert.ok(aoiz !== -1, 'Aoiz never made it into the list: ' + items.join(', '));
+	assert.ok(anora < aoiz,
+		'Añora must precede Aoiz; got ' + items.join(', ') + ' -- comparator is byte order');
+});
+test('name-desc is the exact reverse', () => {
+	const asc = sortBy('name-asc');
+	const desc = sortBy('name-desc');
+	assert.deepStrictEqual(desc, [...asc].reverse());
+});
+test('sorting by name shows no parenthesised extra info', () => {
+	assert.ok(sortBy('name-asc').every(n => n.indexOf('(') === -1),
+		'name sort should not append population or area');
+});
+test('switching back to another sort still works', () => {
+	const items = sortBy('population-desc');
+	assert.ok(items.length > 0);
+	assert.match(items[0], /\(/, 'population sort lost its extra info');
+});
+
 console.log('\nexport / import');
 test('export produces an importable payload', () => {
 	$('exportButton').dispatchEvent(new window.Event('click'));

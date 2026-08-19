@@ -45,9 +45,16 @@ de las dos sirve. Todas las rutas son relativas y el `scope` del manifest es
 `./`, así que la app funciona en cualquier subcarpeta; si algún día quieres la
 URL corta, basta mover el contenido de `quiz-municipios/` a la raíz del repo.
 
-Para publicar cambios posteriores: `git add . && git commit -m "..." && git push`.
-Si tocas archivos ya cacheados, sube `CACHE_VERSION` en `sw.js` o los
-dispositivos seguirán sirviendo la copia vieja.
+Para publicar cambios posteriores basta con:
+
+```bash
+git add . && git commit -m "..." && git push
+```
+
+La app instalada recoge el cambio **sola**, en el arranque siguiente. Lo explica
+la sección de service worker más abajo; el único caso que aún necesita subir
+`CACHE_VERSION` en `sw.js` es regenerar los iconos, el overlay o los datos del
+mapa.
 
 ## Instalar en el iPhone
 
@@ -113,18 +120,48 @@ PNG de 80 KB. `main.js` recae en el cálculo en runtime si el archivo no está, 
 es el caso de los mapas de Murcia, Madrid y Cádiz: esos envuelven sus paths en un
 `<g>` con `transform` y `clipPath` que el script no implementa.
 
+## Cómo se actualiza la app instalada
+
+Un service worker sirve de caché, así que una app instalada puede quedarse con
+código viejo indefinidamente aunque el sitio ya esté actualizado. El fallo es
+silencioso: subes un arreglo y el móvil nunca lo ve. Para evitarlo, `sw.js`
+reparte los archivos en tres grupos según cómo se comportan al redesplegar:
+
+| Grupo | Qué incluye | Estrategia |
+| --- | --- | --- |
+| Shell | `index.html`, CSS y los tres JS de lógica, manifest (~50 KB) | Se sirve de caché al instante y se revalida en segundo plano |
+| Static | Iconos y overlay de fronteras | Solo de caché |
+| Data | `map.js` y `municipios.js` (~17 MB) | Solo de caché |
+
+El shell se actualiza solo: el arranque es instantáneo porque responde la caché,
+y la recarga en segundo plano deja la versión nueva lista para **el arranque
+siguiente**. Es decir, un cambio tarda un arranque en aparecer, sin tocar nada.
+
+Static y Data no se revalidan nunca, porque reconsultar 17 MB en cada arranque
+anularía el propósito. Esos sí necesitan que subas `CACHE_VERSION`.
+
+La revalidación usa `cache: 'no-cache'` a propósito: GitHub Pages envía
+`Cache-Control: max-age=600`, así que sin eso la caché HTTP del navegador podría
+ocultar un despliegue durante diez minutos.
+
 ## Tests
 
 ```bash
 node tools/test_storage.js quiz-municipios   # 28 pruebas de la capa de datos
-npm install jsdom fake-indexeddb             # solo para el test de integración
-node tools/test_app.js quiz-municipios       # 27 pruebas de la app completa
+node tools/test_sw.js quiz-municipios        # 12 pruebas del service worker
+npm install jsdom fake-indexeddb             # solo para los dos siguientes
+node tools/test_css.js quiz-municipios       #  4 pruebas de cascada CSS
+node tools/test_app.js quiz-municipios       # 34 pruebas de la app completa
 ```
 
 El test de integración arranca `index.html` de verdad en jsdom con los 16 MB de
 mapa y los 8.481 municipios, y comprueba aciertos, normalización de acentos,
-duplicados, ordenaciones, exportar/importar, Borrar y la recuperación del
-progreso tras un borrado de `localStorage`.
+duplicados, las ocho ordenaciones, exportar/importar, Borrar y la recuperación
+del progreso tras un borrado de `localStorage`.
+
+`test_sw.js` es el que cubre lo de arriba contra un mock de la Cache API:
+comprueba que un redespliegue del shell entra solo, que los 17 MB no se vuelven
+a pedir, y que sin conexión la app sigue arrancando.
 
 ## Servidor local
 

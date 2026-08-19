@@ -1,28 +1,40 @@
 /* Service worker for Quiz Municipios.
  *
  * Two jobs: make the app launch instantly from the home screen, and make it
- * work with no connection at all. Bump CACHE_VERSION whenever any precached
- * file changes, otherwise clients keep serving the old copy forever.
+ * work with no connection at all.
  *
- * The map data is ~17 MB, so it is deliberately NOT part of the blocking
- * install step: a single flaky request would fail the whole installation and
- * leave the app uninstallable. Instead the shell installs immediately and the
- * heavy files are warmed in the background, with the fetch handler caching
- * whatever it sees on demand as a backstop.
+ * Assets are split by how they behave on a redeploy, because one strategy cannot
+ * serve both ends of a 17 MB app:
+ *
+ *   SHELL   Small files that change whenever the app changes. Served from cache
+ *           for an instant launch, then revalidated in the background, so a new
+ *           deploy is picked up on the *next* launch with no version bump. This
+ *           is what stops "I pushed a fix and my phone never saw it".
+ *
+ *   STATIC  Icons and the prebuilt border overlay. Small but effectively
+ *           immutable, so straight from cache.
+ *
+ *   DATA    map.js and municipios.js, ~17 MB together. Straight from cache:
+ *           revalidating these on every launch would defeat the whole point.
+ *
+ * STATIC and DATA only refresh when CACHE_VERSION changes, so bump it if you
+ * regenerate the icons, the overlay, or the map data.
  */
 
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const CACHE_NAME = 'quiz-municipios-' + CACHE_VERSION;
 
-// Small, must-have files. Installation fails if any of these fail.
-const CORE_ASSETS = [
+const SHELL_ASSETS = [
 	'./',
 	'./index.html',
 	'./style.css',
 	'./storage.js',
 	'./shell.js',
 	'./main.js',
-	'./manifest.webmanifest',
+	'./manifest.webmanifest'
+];
+
+const STATIC_ASSETS = [
 	'./icons/apple-touch-icon.png',
 	'./icons/icon-192.png',
 	'./icons/icon-512.png',
@@ -31,18 +43,21 @@ const CORE_ASSETS = [
 	'./outlines/outline-spain.png'
 ];
 
-// Large data files. Warmed in the background, never block installation.
+// Large. Warmed in the background so a failed download cannot fail the install.
 const DATA_ASSETS = [
 	'./municipios.js',
 	'./map.js'
 ];
 
+const INDEX_KEY = './index.html';
+
+// Resolved once, so the fetch handler can classify a request by its URL.
+const SHELL_URLS = new Set(SHELL_ASSETS.map(p => new URL(p, self.location.href).href));
+
 self.addEventListener('install', event => {
 	event.waitUntil((async () => {
 		const cache = await caches.open(CACHE_NAME);
-		await cache.addAll(CORE_ASSETS);
-		// Kick the big files off without awaiting them, so a slow or dropped
-		// connection cannot block the install.
+		await cache.addAll(SHELL_ASSETS.concat(STATIC_ASSETS));
 		warmDataAssets();
 		await self.skipWaiting();
 	})());
@@ -64,8 +79,7 @@ async function warmDataAssets() {
 	const cache = await caches.open(CACHE_NAME);
 	for (const url of DATA_ASSETS) {
 		try {
-			const existing = await cache.match(url);
-			if (existing) continue;
+			if (await cache.match(url)) continue;
 			const response = await fetch(url, {cache: 'reload'});
 			if (response && response.ok) await cache.put(url, response);
 		} catch (e) {
@@ -78,6 +92,48 @@ self.addEventListener('message', event => {
 	if (event.data === 'warm-data') warmDataAssets();
 });
 
+// Serve the cached copy at once, then refresh it for next time. The refresh asks
+// for 'no-cache' so it revalidates against the server rather than being answered
+// from the HTTP cache, which GitHub Pages sets to max-age=600.
+async function staleWhileRevalidate(event, cacheKey) {
+	const cache = await caches.open(CACHE_NAME);
+	const key = cacheKey || event.request;
+	const cached = await cache.match(key);
+
+	const refresh = (async () => {
+		try {
+			const response = await fetch(event.request.url, {cache: 'no-cache'});
+			if (response && response.ok) await cache.put(key, response.clone());
+			return response;
+		} catch (e) {
+			return null;   // offline: the cached copy is the answer
+		}
+	})();
+
+	if (cached) {
+		// Without waitUntil the worker can be killed as soon as the cached
+		// response is returned, and the refresh never lands.
+		event.waitUntil(refresh);
+		return cached;
+	}
+	return (await refresh) || Response.error();
+}
+
+async function cacheFirst(event) {
+	const cached = await caches.match(event.request);
+	if (cached) return cached;
+	try {
+		const response = await fetch(event.request);
+		if (response && response.ok) {
+			const cache = await caches.open(CACHE_NAME);
+			await cache.put(event.request, response.clone());
+		}
+		return response;
+	} catch (e) {
+		return Response.error();
+	}
+}
+
 self.addEventListener('fetch', event => {
 	const request = event.request;
 	if (request.method !== 'GET') return;
@@ -85,27 +141,23 @@ self.addEventListener('fetch', event => {
 	const url = new URL(request.url);
 	const sameOrigin = url.origin === self.location.origin;
 
-	// Navigations: serve the cached shell so launching offline works, and fall
-	// back to the network only when there is nothing cached yet.
+	// Navigations: the cached shell answers immediately so launching offline
+	// works, and the background refresh means a redeploy lands next launch.
 	if (request.mode === 'navigate') {
 		event.respondWith((async () => {
-			const cached = await caches.match('./index.html');
-			if (cached) return cached;
-			try {
-				return await fetch(request);
-			} catch (e) {
-				return new Response(
-					'<h1>Sin conexión</h1><p>Abre la app una vez con conexión para guardarla.</p>',
-					{status: 503, headers: {'Content-Type': 'text/html; charset=utf-8'}}
-				);
-			}
+			const response = await staleWhileRevalidate(event, INDEX_KEY);
+			if (response && response.ok) return response;
+			return new Response(
+				'<h1>Sin conexión</h1><p>Abre la app una vez con conexión para guardarla.</p>',
+				{status: 503, headers: {'Content-Type': 'text/html; charset=utf-8'}}
+			);
 		})());
 		return;
 	}
 
 	if (!sameOrigin) {
-		// Google Fonts and anything else external: network first, fall back to
-		// whatever happens to be cached. Never let it break an offline launch.
+		// Google Fonts and anything else external: network first, falling back to
+		// whatever is cached. Never let it break an offline launch.
 		event.respondWith(
 			fetch(request)
 				.then(response => {
@@ -119,19 +171,10 @@ self.addEventListener('fetch', event => {
 		return;
 	}
 
-	// Same-origin assets: cache first, then network, caching what we fetch.
-	event.respondWith((async () => {
-		const cached = await caches.match(request);
-		if (cached) return cached;
-		try {
-			const response = await fetch(request);
-			if (response && response.ok) {
-				const cache = await caches.open(CACHE_NAME);
-				cache.put(request, response.clone());
-			}
-			return response;
-		} catch (e) {
-			return Response.error();
-		}
-	})());
+	if (SHELL_URLS.has(url.href)) {
+		event.respondWith(staleWhileRevalidate(event));
+		return;
+	}
+
+	event.respondWith(cacheFirst(event));
 });
