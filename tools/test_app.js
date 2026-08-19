@@ -535,7 +535,73 @@ test('Borrar does not duplicate listeners', () => {
 			'a one-finger drag was intercepted, which stops the map panning');
 	});
 
+	await testAsync('two fingers zoom and pan at the same time', async () => {
+		// Same 2x spread as pinchTo2x, but the midpoint also travels from
+		// (195,111) to (245,141). The content that was under the fingers has to end
+		// up under them where they finished, not where they started.
+		window.resetMapZoom();
+		touch('touchstart', [[145, 86], [245, 136]]);
+		touch('touchmove', [[145, 91], [345, 191]]);
+		touch('touchend', []);
+		const s = window.mapZoomState();
+		assert.ok(Math.abs(s.zoom - 2) < 0.001, 'zoom is ' + s.zoom);
+		// Anchor (195,111) at zoom 1 sits at (390,222) at zoom 2; to show it at the
+		// final midpoint (245,141) the offset must be (145,81).
+		assert.ok(Math.abs(s.scrollLeft - 145) < 0.5,
+			'expected scrollLeft 145, got ' + s.scrollLeft + ' -- the map ignored the drag');
+		assert.ok(Math.abs(s.scrollTop - 81) < 0.5,
+			'expected scrollTop 81, got ' + s.scrollTop);
+		// A pure pinch about the centre would have landed on 195/111, so the 50/30
+		// difference is exactly the pan the gesture carried.
+		assert.notStrictEqual(Math.round(s.scrollLeft), 195);
+	});
+
+	await testAsync('lifting one finger keeps the gesture going, with no jump', async () => {
+		window.resetMapZoom();
+		touch('touchstart', [[145, 86], [245, 136]]);
+		touch('touchmove', [[145, 91], [345, 191]]);
+		const before = window.mapZoomState().transform;
+		// Lift the first finger; the second stays put at (345,191).
+		touch('touchend', [[345, 191]]);
+		const after = window.mapZoomState();
+		assert.strictEqual(after.transform, before,
+			'the view jumped when a finger came up:\n       ' + before + '\n       ' + after.transform);
+		assert.strictEqual(after.gesturing, true, 'the gesture was dropped early');
+
+		// Carry on dragging with the one finger: left and up by (45,31).
+		touch('touchmove', [[300, 160]]);
+		touch('touchend', []);
+		const s = window.mapZoomState();
+		assert.ok(Math.abs(s.zoom - 2) < 0.001, 'the zoom from the pinch was lost: ' + s.zoom);
+		assert.ok(Math.abs(s.scrollLeft - 190) < 0.5,
+			'expected scrollLeft 190 after the one-finger drag, got ' + s.scrollLeft);
+		assert.ok(Math.abs(s.scrollTop - 112) < 0.5,
+			'expected scrollTop 112, got ' + s.scrollTop);
+	});
+
+	await testAsync('the preview cannot be dragged off its own edges', async () => {
+		window.resetMapZoom();
+		touch('touchstart', [[145, 86], [245, 136]]);
+		// Spread to 2x while hurling the midpoint way off the viewport.
+		touch('touchmove', [[1900, 1900], [2100, 2000]]);
+		const t = window.mapZoomState().transform;
+		const nums = t.match(/-?[\d.]+/g).map(Number);
+		// translate(x, y) scale(s): x must stay within [vw - cw, 0] = [-390, 0].
+		assert.ok(nums[0] <= 0.01 && nums[0] >= -390.01,
+			'horizontal preview escaped its bounds: ' + t);
+		assert.ok(nums[1] <= 0.01 && nums[1] >= -222.01,
+			'vertical preview escaped its bounds: ' + t);
+		touch('touchend', []);
+		const s = window.mapZoomState();
+		assert.ok(s.scrollLeft >= 0 && s.scrollLeft <= s.maxScrollX + 0.01,
+			'committed offset out of range: ' + s.scrollLeft + ' of ' + s.maxScrollX);
+		assert.ok(s.scrollTop >= 0 && s.scrollTop <= s.maxScrollY + 0.01,
+			'committed offset out of range: ' + s.scrollTop);
+	});
+
 	await testAsync('zoom cannot go below the full map', async () => {
+		window.resetMapZoom();
+		pinchTo2x();
 		touch('touchstart', [[145, 86], [245, 136]]);
 		touch('touchmove', [[190, 108], [200, 114]]);
 		touch('touchend', []);

@@ -113,13 +113,21 @@ nuevo y queda nítido a cualquier aumento. Durante el pellizco sí se usa un
 `transform` como vista previa —redimensionar la caja en cada frame relayoutearía y
 repintaría 13.904 paths— y al soltar se confirma el tamaño real.
 
-**El desplazamiento es el scroll nativo del navegador.** No es solo por
-comodidad: arrastrar con `transform` no puede funcionar aquí, porque el SVG solo
-pinta lo que cubre su `viewBox`, así que moverlo de lado revelaría hueco vacío en
-vez del trozo de país contiguo. Ese fue justo el fallo de la primera versión, que
-además clampaba el desplazamiento contra un contenedor del mismo ancho y lo
-forzaba a cero. Con scroll nativo salen gratis la inercia y el traspaso al scroll
-de la página al llegar al borde.
+**Con un dedo, el desplazamiento es el scroll nativo del navegador.** No es solo
+por comodidad: arrastrar con `transform` no puede funcionar aquí, porque el SVG
+solo pinta lo que cubre su `viewBox`, así que moverlo de lado revelaría hueco
+vacío en vez del trozo de país contiguo. Ese fue justo el fallo de la primera
+versión, que además clampaba el desplazamiento contra un contenedor del mismo
+ancho y lo forzaba a cero. Con scroll nativo salen gratis la inercia y el traspaso
+al scroll de la página al llegar al borde.
+
+**Con dos dedos se amplía y se mueve a la vez**, como cualquier mapa. El punto de
+contenido que quedó bajo los dedos al empezar se mantiene bajo ellos mientras se
+mueven, no anclado a su posición inicial. Los invariantes del gesto se recalculan
+cada vez que cambia el conjunto de dedos (`anchorTo`), así que levantar uno no
+provoca ningún salto: el pellizco se convierte en arrastre de un dedo y sigue
+siendo un solo movimiento continuo. La vista previa está acotada para que no se
+pueda arrastrar el mapa fuera de sus bordes y luego rebote al confirmar.
 
 **El overlay de fronteras era un PNG** de 3538 px estirado sobre el mapa, con
 techo de resolución propio. Ahora son paths vectoriales con
@@ -233,7 +241,7 @@ node tools/test_storage.js quiz-municipios   # 28 pruebas de la capa de datos
 node tools/test_sw.js quiz-municipios        # 12 pruebas del service worker
 npm install jsdom fake-indexeddb             # solo para los dos siguientes
 node tools/test_css.js quiz-municipios       #  4 pruebas de cascada CSS
-node tools/test_app.js quiz-municipios       # 44 pruebas de la app completa
+node tools/test_app.js quiz-municipios       # 47 pruebas de la app completa
 ```
 
 El test de integración arranca `index.html` de verdad en jsdom con los 16 MB de
@@ -242,8 +250,9 @@ duplicados, las ocho ordenaciones, exportar/importar, Borrar, la recuperación d
 progreso tras un borrado de `localStorage`, y la mecánica del zoom: que un pinch
 de 2x duplica la caja del mapa, que **queda sitio real para desplazarse en
 horizontal**, que el punto focal no se mueve bajo los dedos, que el `transform` se
-suelta al confirmar y que un toque de un solo dedo no se intercepta —si se
-interceptara, el mapa dejaría de desplazarse.
+suelta al confirmar, que un toque de un solo dedo no se intercepta —si se
+interceptara, el mapa dejaría de desplazarse—, que dos dedos amplían y mueven a
+la vez, y que levantar un dedo no produce ningún salto.
 
 `test_sw.js` es el que cubre lo de arriba contra un mock de la Cache API:
 comprueba que un redespliegue del shell entra solo, que los 17 MB no se vuelven

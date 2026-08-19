@@ -232,15 +232,16 @@ function setupDataModal() {
 // whole country. The vector is then rendered at the larger size, so it is sharp
 // at any magnification, and the viewport simply clips it.
 //
-// Panning is the browser's own scrolling. That matters for more than tidiness:
-// panning with a transform cannot work here, because the svg only paints what
-// its viewBox covers, so sliding it sideways reveals blank space rather than the
-// neighbouring part of Spain. Native scrolling also brings momentum and
-// edge-handoff to the page for free.
+// A one-finger drag is left to the browser: panning the zoomed map IS scrolling
+// the viewport. That matters for more than tidiness, because panning with a
+// transform cannot work here -- the svg only paints what its viewBox covers, so
+// sliding it sideways would reveal blank space rather than the neighbouring part
+// of Spain. Native scrolling also brings momentum and edge-handoff for free.
 //
-// A pinch still uses a transform while the fingers are down -- resizing the box
-// mid-gesture would relayout and repaint 13,904 paths every frame -- and commits
-// to a real size on release.
+// Two fingers zoom AND pan at once, the way a map is expected to behave. While
+// they are down the view is previewed with a transform, because resizing the box
+// mid-gesture would relayout and repaint 13,904 paths every frame; the real size
+// and scroll offset are committed when the fingers come up.
 function setupMapZoom() {
 	var viewport = document.getElementById("mapViewport");
 	var map = document.getElementById("mapSvg");
@@ -249,9 +250,8 @@ function setupMapZoom() {
 	var MAX_ZOOM = 14;
 	var zoom = 1;
 	var aspect = null;    // viewBox height / width
-	var pinch = null;
+	var gesture = null;
 	var lastTap = 0;
-	var wheelTimer = null;
 
 	function readAspect() {
 		if (aspect) return aspect;
@@ -288,14 +288,14 @@ function setupMapZoom() {
 		viewport.scrollTop = Math.max(0, Math.min(maxScrollY(), y));
 	}
 
-	// Change the zoom, keeping the content under (fx, fy) -- viewport coordinates
-	// -- exactly where it is.
-	function zoomTo(next, fx, fy, scroll0) {
-		var target = Math.max(1, Math.min(MAX_ZOOM, next));
-		var k = target / zoom;
-		zoom = target;
+	// Move the content point `anchor` (in map pixels at the current zoom) to the
+	// viewport position `target`, at the new zoom level.
+	function applyZoom(next, anchor, target) {
+		var wanted = Math.max(1, Math.min(MAX_ZOOM, next));
+		var k = wanted / zoom;
+		zoom = wanted;
 		if (!relayout()) return;
-		scrollTo((scroll0.x + fx) * k - fx, (scroll0.y + fy) * k - fy);
+		scrollTo(anchor.x * k - target.x, anchor.y * k - target.y);
 	}
 
 	function reset() {
@@ -309,73 +309,126 @@ function setupMapZoom() {
 		return Math.sqrt(dx * dx + dy * dy);
 	}
 
-	function focalPoint(a, b) {
+	// Where the fingers are, in viewport coordinates.
+	function centroid(touches) {
 		var box = viewport.getBoundingClientRect();
-		return {
-			x: (a.clientX + b.clientX) / 2 - box.left,
-			y: (a.clientY + b.clientY) / 2 - box.top
-		};
+		var x = 0, y = 0;
+		for (var i = 0; i < touches.length; i++) {
+			x += touches[i].clientX;
+			y += touches[i].clientY;
+		}
+		return {x: x / touches.length - box.left, y: y / touches.length - box.top};
 	}
 
-	function beginPinch(a, b) {
-		// overflow is frozen for the duration so the scroll offset cannot drift
-		// under the transform, and will-change is only set here: left on
-		// permanently it pins a rasterised layer and the map never sharpens up.
-		viewport.classList.add("gesturing");
-		var focus = focalPoint(a, b);
-		pinch = {
-			d0: distance(a, b) || 1,
-			focus: focus,
-			scroll: {x: viewport.scrollLeft, y: viewport.scrollTop},
-			scale: 1
-		};
-	}
+	/* --- preview transform, live while fingers are down --------------------- */
 
-	function updatePinch(a, b) {
-		if (!pinch) return;
-		var raw = distance(a, b) / pinch.d0;
-		// Bound the preview to the same range the commit will allow, so the
-		// gesture cannot show something that then snaps back.
-		var lo = 1 / zoom, hi = MAX_ZOOM / zoom;
-		pinch.scale = Math.max(lo, Math.min(hi, raw));
+	function previewTransform() {
+		var s = gesture.scale;
+		var vw = viewport.clientWidth;
+		var vh = viewport.clientHeight;
+		var cw = map.offsetWidth * s;
+		var ch = map.offsetHeight * s;
 
-		// Hold the focal point still: content coordinate c renders at
-		// c * s + t - scroll, and we want the focal content point back at focus.
-		var s = pinch.scale;
-		var tx = pinch.focus.x + pinch.scroll.x - (pinch.scroll.x + pinch.focus.x) * s;
-		var ty = pinch.focus.y + pinch.scroll.y - (pinch.scroll.y + pinch.focus.y) * s;
+		// Hold the anchored content point under the fingers:
+		//   screen = content * s + t - scroll
+		var tx = gesture.at.x + gesture.scroll.x - gesture.anchor.x * s;
+		var ty = gesture.at.y + gesture.scroll.y - gesture.anchor.y * s;
+
+		// ...but never far enough to drag the map off its own edges, which would
+		// only snap back on commit. s >= 1/zoom guarantees the map still covers the
+		// viewport, so these ranges are never empty.
+		tx = Math.min(gesture.scroll.x, Math.max(vw + gesture.scroll.x - cw, tx));
+		ty = Math.min(gesture.scroll.y, Math.max(vh + gesture.scroll.y - ch, ty));
+
 		map.style.transform = "translate(" + tx + "px, " + ty + "px) scale(" + s + ")";
+		gesture.tx = tx;
+		gesture.ty = ty;
 	}
 
-	function endPinch() {
-		viewport.classList.remove("gesturing");
-		if (!pinch) return;
-		var p = pinch;
-		pinch = null;
-		map.style.transform = "";
-		zoomTo(zoom * p.scale, p.focus.x, p.focus.y, p.scroll);
+	// Re-derive the gesture's invariants from whatever is on screen right now.
+	// Called whenever the set of fingers changes, so adding or lifting one never
+	// makes the map jump: the content currently under the fingers stays there.
+	function anchorTo(touches) {
+		var at = centroid(touches);
+		var s = gesture.scale;
+		gesture.at = at;
+		gesture.anchor = {
+			x: (at.x + gesture.scroll.x - gesture.tx) / s,
+			y: (at.y + gesture.scroll.y - gesture.ty) / s
+		};
+		gesture.spread = touches.length > 1 ? (distance(touches[0], touches[1]) || 1) : null;
+		gesture.scaleAtAnchor = s;
 	}
+
+	function beginGesture(touches) {
+		// Read the scroll offset before freezing overflow, and set will-change only
+		// for the duration: left on permanently it pins a rasterised layer and the
+		// map never sharpens back up.
+		gesture = {
+			scroll: {x: viewport.scrollLeft, y: viewport.scrollTop},
+			scale: 1,
+			tx: 0,
+			ty: 0
+		};
+		viewport.classList.add("gesturing");
+		anchorTo(touches);
+	}
+
+	function updateGesture(touches) {
+		if (!gesture) return;
+		gesture.at = centroid(touches);
+		if (touches.length > 1 && gesture.spread) {
+			var raw = gesture.scaleAtAnchor * (distance(touches[0], touches[1]) / gesture.spread);
+			// Bounded to the same range the commit allows, so the preview can never
+			// show something that then springs back.
+			gesture.scale = Math.max(1 / zoom, Math.min(MAX_ZOOM / zoom, raw));
+		}
+		previewTransform();
+	}
+
+	function endGesture() {
+		viewport.classList.remove("gesturing");
+		if (!gesture) return;
+		var g = gesture;
+		gesture = null;
+		map.style.transform = "";
+		// The anchored content point should end up wherever the fingers left it.
+		applyZoom(zoom * g.scale, g.anchor, g.at);
+	}
+
+	/* --- events ------------------------------------------------------------- */
 
 	viewport.addEventListener("touchstart", function(event) {
-		if (event.touches.length === 2) {
+		if (event.touches.length >= 2) {
 			event.preventDefault();
-			beginPinch(event.touches[0], event.touches[1]);
+			if (gesture) {
+				anchorTo(event.touches);      // a finger joined mid-gesture
+			} else {
+				beginGesture(event.touches);
+			}
 		}
 		// One finger is deliberately left alone: that is the browser scrolling the
 		// viewport, which is what pans the map.
 	}, {passive: false});
 
 	viewport.addEventListener("touchmove", function(event) {
-		if (pinch && event.touches.length === 2) {
-			event.preventDefault();
-			updatePinch(event.touches[0], event.touches[1]);
-		}
+		if (!gesture) return;
+		event.preventDefault();
+		updateGesture(event.touches);
 	}, {passive: false});
 
 	viewport.addEventListener("touchend", function(event) {
-		if (pinch && event.touches.length < 2) {
-			endPinch();
-			lastTap = 0;
+		if (gesture) {
+			if (event.touches.length === 0) {
+				endGesture();
+				lastTap = 0;
+			} else {
+				// Still a finger on the glass: carry on panning with it rather than
+				// dropping the gesture, which is what makes pinch-then-drag feel like
+				// one continuous movement.
+				anchorTo(event.touches);
+				previewTransform();
+			}
 			return;
 		}
 		if (event.touches.length === 0) {
@@ -391,7 +444,7 @@ function setupMapZoom() {
 	});
 
 	viewport.addEventListener("touchcancel", function() {
-		if (pinch) endPinch();
+		if (gesture) endGesture();
 	});
 
 	// Ctrl/Cmd + wheel zoom, so the same code path is reachable on a desktop.
@@ -399,17 +452,14 @@ function setupMapZoom() {
 		if (!event.ctrlKey && !event.metaKey) return;
 		event.preventDefault();
 		var box = viewport.getBoundingClientRect();
-		var fx = event.clientX - box.left;
-		var fy = event.clientY - box.top;
-		var scroll = {x: viewport.scrollLeft, y: viewport.scrollTop};
-		zoomTo(zoom * (event.deltaY < 0 ? 1.12 : 1 / 1.12), fx, fy, scroll);
-		if (wheelTimer) clearTimeout(wheelTimer);
-		wheelTimer = setTimeout(function() { wheelTimer = null; }, 180);
+		var at = {x: event.clientX - box.left, y: event.clientY - box.top};
+		var anchor = {x: viewport.scrollLeft + at.x, y: viewport.scrollTop + at.y};
+		applyZoom(zoom * (event.deltaY < 0 ? 1.12 : 1 / 1.12), anchor, at);
 	}, {passive: false});
 
 	window.addEventListener("resize", function() {
-		// Keep the zoom level, resize the boxes to the new width, and pull the
-		// scroll offset back inside the new bounds.
+		// Keep the zoom, resize the boxes to the new width, and pull the scroll
+		// offset back inside the new bounds.
 		var scroll = {x: viewport.scrollLeft, y: viewport.scrollTop};
 		if (relayout()) scrollTo(scroll.x, scroll.y);
 	});
@@ -427,7 +477,8 @@ function setupMapZoom() {
 			scrollTop: viewport.scrollTop,
 			maxScrollX: maxScrollX(),
 			maxScrollY: maxScrollY(),
-			transform: map.style.transform
+			transform: map.style.transform,
+			gesturing: gesture !== null
 		};
 	};
 }
