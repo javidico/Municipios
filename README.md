@@ -24,25 +24,30 @@ añadieron dos capas más:
 Hace falta HTTPS: sin él el navegador no registra el service worker y la app no
 se puede instalar. GitHub Pages lo da gratis.
 
+El repo es <https://github.com/javidico/Municipios>. Para subirlo:
+
 ```bash
-git init
-git add .
-git commit -m "Quiz Municipios instalable como PWA"
-git branch -M main
-git remote add origin https://github.com/<tu-usuario>/quiz-municipios.git
+git remote add origin https://github.com/javidico/Municipios.git
 git push -u origin main
 ```
 
-Luego, en el repo: **Settings → Pages → Source: Deploy from a branch → main /
-(root)**. En un par de minutos la app queda en:
+Luego, una vez y a mano en la web del repo:
+**Settings → Pages → Source: Deploy from a branch → Branch: `main` / `(root)` → Save**.
+
+En un par de minutos la app queda en:
 
 ```
-https://<tu-usuario>.github.io/quiz-municipios/quiz-municipios/
+https://javidico.github.io/Municipios/quiz-municipios/
 ```
 
-Todas las rutas son relativas y el `scope` del manifest es `./`, así que
-funciona en cualquier subcarpeta. Si prefieres una URL más corta, mueve el
-contenido de `quiz-municipios/` a la raíz del repo.
+La raíz `https://javidico.github.io/Municipios/` redirige ahí, así que cualquiera
+de las dos sirve. Todas las rutas son relativas y el `scope` del manifest es
+`./`, así que la app funciona en cualquier subcarpeta; si algún día quieres la
+URL corta, basta mover el contenido de `quiz-municipios/` a la raíz del repo.
+
+Para publicar cambios posteriores: `git add . && git commit -m "..." && git push`.
+Si tocas archivos ya cacheados, sube `CACHE_VERSION` en `sw.js` o los
+dispositivos seguirán sirviendo la copia vieja.
 
 ## Instalar en el iPhone
 
