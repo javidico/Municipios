@@ -127,29 +127,54 @@ python tools/build_icons.py      # iconos, desde la silueta real de España
 python tools/build_outlines.py   # overlay de fronteras provinciales
 ```
 
-`build_outlines.py` calcula las fronteras **topológicamente**, no por píxeles.
-Trocea cada polígono municipal en aristas y las clasifica:
+`build_outlines.py` calcula las fronteras en dos fases. Una frontera es donde la
+provincia de un lado difiere de la del otro; parece obvio, pero las lecturas
+ingenuas de esa frase fallan todas.
 
-- arista usada por dos polígonos de la misma provincia → interior, se descarta;
-- usada por dos polígonos de provincias distintas → frontera provincial;
-- usada una sola vez → borde exterior: costa o frontera nacional.
+**Fase 1, barata.** Se trocea cada polígono municipal en aristas, cuantizadas para
+que los vértices compartidos coincidan. Una arista usada por dos polígonos de la
+misma provincia no puede ser frontera de ninguna forma: eso elimina 786.034 de
+1.003.950. Lo que hace viable todo esto es que el **86% de las aristas aparecen
+exactamente dos veces**, o sea que la geometría comparte vértices de verdad.
 
-Lo que lo hace viable es que el **86% de las aristas aparecen exactamente dos
-veces**: la geometría comparte vértices de verdad, no son trazados
-independientes. De 1.003.950 aristas únicas quedan 224.792, que se encadenan en
-polilíneas y se simplifican con Douglas-Peucker. La simplificación no es solo por
-tamaño: el original es un trazado ráster de escalones de 0,1 unidades, y
-colapsarlos es lo que hace que las fronteras se vean limpias y no pixeladas.
+**Fase 2, la que decide.** El resto son solo candidatas, y contar usos no basta:
 
-Resultado: 275 KB (70 KB gzipped, menos que el PNG que sustituyó) y sin techo de
-resolución. Además queda **completo**: la versión ráster se perdía las fronteras
-entre provincias vecinas que compartían uno de los cuatro colores del mapa.
+- *"usada una vez, luego es borde exterior"* es falso. Dibujaba contornos
+  espurios alrededor de municipios de interior normales (Buñol, La Gineta,
+  Alustante) cuyos polígonos no comparten aristas con sus vecinos. Se veían como
+  agujeros dentro de su propia provincia.
+- *"dos polígonos con provincias distintas, luego es frontera"* también es falso.
+  Si un polígono queda tapado por otro, la provincia declarada no es la que se
+  ve, y la línea aparece en medio de una provincia de un solo color.
+
+Así que se rasterizan las provincias en un mapa de índices y cada candidata se
+muestrea un par de píxeles a cada lado: sobrevive solo si los dos lados difieren.
+La costa se queda (provincia contra mar), una frontera real se queda, y un
+municipio rodeado por su propia provincia se descarta. Tras eso, ningún bucle
+cerrado tiene la misma provincia a ambos lados y los únicos enclaves que quedan
+son los reales: Treviño, Orduña, Petilla de Aragón.
+
+Después se encadenan en polilíneas y se simplifican con Douglas-Peucker. Eso
+último no es solo por tamaño: el original es un trazado ráster de escalones de 0,1
+unidades, y colapsarlos es lo que hace que se vean limpias y no pixeladas.
+
+Resultado: 265 KB (88 KB gzipped, en línea con el PNG que sustituyó) y sin techo
+de resolución. Además queda **completo**: la versión ráster se perdía las
+fronteras entre provincias vecinas que compartían uno de los cuatro colores.
 
 Hay un filtro `MIN_EXTENT`: el mapa contiene miles de micro-polígonos —`path3` es
 un cuadrado de 0,09 × 0,075 unidades— cuyas aristas son frontera legítima pero se
 ven como moteado por las provincias. No es un problema de encaje de vértices:
 pasar `QUANT` de 1e-4 a 2e-2 cambia el recuento en menos del 3%, la geometría es
 así de pequeña.
+
+Las provincias se leen parseando `municipios.js` de verdad, no con un regex. Uno
+que exigía que `"provincia"` fuese seguido de `"population"` se dejaba 82 paths
+en silencio, y esos 82 hacían doble daño: cada uno recibía una provincia propia,
+así que sus aristas contra vecinos legítimos contaban como frontera, y al
+rasterizar se omitían, dejando huecos de «mar» falso dentro de Burgos o
+Guadalajara. (El parse necesita normalizar dos rarezas del archivo: comas
+sobrantes y un `"population": 717.` con el punto colgando.)
 
 `main.js` recae en el cálculo ráster en runtime si el archivo no está, que es el
 caso de los mapas de Murcia, Madrid y Cádiz: esos envuelven sus paths en un `<g>`

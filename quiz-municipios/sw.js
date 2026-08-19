@@ -21,7 +21,7 @@
  * regenerate the icons, the overlay, or the map data.
  */
 
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4';
 const CACHE_NAME = 'quiz-municipios-' + CACHE_VERSION;
 
 const SHELL_ASSETS = [
