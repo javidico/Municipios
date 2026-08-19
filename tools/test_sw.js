@@ -133,7 +133,7 @@ const ALL = ['', 'index.html', 'style.css', 'storage.js', 'shell.js', 'main.js',
 	'manifest.webmanifest', 'municipios.js', 'map.js',
 	'icons/apple-touch-icon.png', 'icons/icon-192.png', 'icons/icon-512.png',
 	'icons/icon-512-maskable.png', 'icons/favicon-32.png',
-	'outlines/outline-spain.png'];
+	'outlines/outline-spain.json'];
 for (const rel of ALL) {
 	const file = rel === '' ? 'index.html' : rel;
 	serve('./' + rel, 'v1:' + file);
@@ -147,32 +147,32 @@ for (const rel of ALL) {
 		const event = makeEvent({});
 		handlers.install(event);
 		await event._settle();
-		const cache = await caches.open('quiz-municipios-v2');
+		const cache = await caches.open('quiz-municipios-v3');
 		['./', './index.html', './style.css', './storage.js', './shell.js',
 			'./main.js', './manifest.webmanifest'].forEach(u =>
 			assert.ok(cache.has(u), u + ' was not cached at install'));
-		assert.ok(cache.has('./outlines/outline-spain.png'), 'overlay not cached');
+		assert.ok(cache.has('./outlines/outline-spain.json'), 'overlay not cached');
 		assert.ok(cache.has('./icons/icon-512.png'), 'icons not cached');
 		assert.ok(skipWaitingCalled, 'skipWaiting was never called');
 	});
 	await test('warms map.js and municipios.js in the background', async () => {
 		// Not awaited by install, so give the warm loop a turn to finish.
 		await new Promise(r => setTimeout(r, 20));
-		const cache = await caches.open('quiz-municipios-v2');
+		const cache = await caches.open('quiz-municipios-v3');
 		assert.ok(cache.has('./map.js'), 'map.js was never warmed');
 		assert.ok(cache.has('./municipios.js'), 'municipios.js was never warmed');
 	});
 
 	console.log('\nactivate');
 	await test('deletes caches from older versions and keeps the current one', async () => {
-		cacheStorage.set('quiz-municipios-v1', new MockCache('quiz-municipios-v1'));
+		cacheStorage.set('quiz-municipios-v2', new MockCache('quiz-municipios-v2'));
 		cacheStorage.set('otra-app-v9', new MockCache('otra-app-v9'));
 		const event = makeEvent({});
 		handlers.activate(event);
 		await event._settle();
-		assert.strictEqual(cacheStorage.has('quiz-municipios-v1'), false,
+		assert.strictEqual(cacheStorage.has('quiz-municipios-v2'), false,
 			'the old version cache was left behind');
-		assert.ok(cacheStorage.has('quiz-municipios-v2'), 'the current cache was deleted');
+		assert.ok(cacheStorage.has('quiz-municipios-v3'), 'the current cache was deleted');
 		assert.ok(cacheStorage.has('otra-app-v9'), 'clobbered another app cache');
 		assert.ok(claimCalled, 'clients.claim was never called');
 	});
@@ -186,7 +186,7 @@ for (const rel of ALL) {
 			'launch waited on the network instead of serving the cache');
 	});
 	await test('and refreshes the cache in the background for next launch', async () => {
-		const cache = await caches.open('quiz-municipios-v2');
+		const cache = await caches.open('quiz-municipios-v3');
 		assert.strictEqual(cache.body('./main.js'), 'v2:main.js',
 			'the background refresh never landed; the phone would stay on v1 forever');
 	});
@@ -212,7 +212,7 @@ for (const rel of ALL) {
 	});
 	await test('the prebuilt overlay is not revalidated either', async () => {
 		requests.length = 0;
-		await dispatchFetch('./outlines/outline-spain.png');
+		await dispatchFetch('./outlines/outline-spain.json');
 		assert.deepStrictEqual(requests, []);
 	});
 
@@ -241,7 +241,7 @@ for (const rel of ALL) {
 		serve('./', 'v2:index.html');
 		const response = await dispatchFetch('./', 'navigate');
 		assert.strictEqual(await response.text(), 'v1:index.html');
-		const cache = await caches.open('quiz-municipios-v2');
+		const cache = await caches.open('quiz-municipios-v3');
 		assert.strictEqual(cache.body('./index.html'), 'v2:index.html',
 			'index.html was not refreshed, so a redeploy would never load');
 	});

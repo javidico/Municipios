@@ -21,7 +21,7 @@
  * regenerate the icons, the overlay, or the map data.
  */
 
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3';
 const CACHE_NAME = 'quiz-municipios-' + CACHE_VERSION;
 
 const SHELL_ASSETS = [
@@ -40,7 +40,7 @@ const STATIC_ASSETS = [
 	'./icons/icon-512.png',
 	'./icons/icon-512-maskable.png',
 	'./icons/favicon-32.png',
-	'./outlines/outline-spain.png'
+	'./outlines/outline-spain.json'
 ];
 
 // Large. Warmed in the background so a failed download cannot fail the install.

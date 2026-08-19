@@ -87,6 +87,31 @@ window.Image = class {
 	get src() { return this._src; }
 };
 
+// jsdom has no fetch. This one resolves against the real filesystem so the
+// prebuilt vector overlay is loaded from the actual file on disk, and a missing
+// one 404s exactly as it would on the server.
+const fetched = [];
+window.fetch = async (input) => {
+	const url = String(input);
+	fetched.push(url);
+	const file = path.join(APP, url);
+	if (!fs.existsSync(file)) return new Response('not found', {status: 404});
+	return new Response(fs.readFileSync(file, 'utf8'), {status: 200});
+};
+
+// Layout, which jsdom does not compute. The zoom maths is all in these numbers,
+// so without them commit() bails out and nothing can be verified.
+const VIEW_W = 390;                                 // a phone's CSS width
+const VIEW_H = Math.round(390 * 1006.6781 / 1769.1083);
+function stubLayout() {
+	const viewport = window.document.getElementById('mapViewport');
+	const map = window.document.getElementById('mapSvg');
+	Object.defineProperty(viewport, 'clientWidth', {value: VIEW_W});
+	Object.defineProperty(viewport, 'clientHeight', {value: VIEW_H});
+	Object.defineProperty(map, 'offsetWidth', {value: VIEW_W});
+	Object.defineProperty(map, 'offsetHeight', {value: VIEW_H});
+}
+
 // A real IndexedDB, so the mirror and the recovery path are genuinely exercised.
 const fakeIndexedDB = require('fake-indexeddb');
 window.indexedDB = fakeIndexedDB.indexedDB;
@@ -108,6 +133,7 @@ if (typeof window.mapSvg === 'undefined' && typeof window.eval('typeof mapSvg') 
 console.log('  scripts evaluated in %ds', ((Date.now() - t0) / 1000).toFixed(1));
 
 // Fire the load handler the way the browser would.
+stubLayout();
 const t1 = Date.now();
 window.onload();
 console.log('  loadPage() completed in %ds', ((Date.now() - t1) / 1000).toFixed(1));
@@ -362,16 +388,18 @@ test('Borrar does not duplicate listeners', () => {
 	});
 
 	console.log('\nprebuilt province outline');
-	await testAsync('the prebuilt spain overlay is the one used', async () => {
-		const asked = loadedImages.filter(i => String(i.src).indexOf('outline-') !== -1);
-		assert.ok(asked.length > 0, 'never looked for a prebuilt overlay');
-		assert.strictEqual(asked[0].src, 'outlines/outline-spain.png');
-		assert.strictEqual(asked[0].exists, true, 'outlines/outline-spain.png missing on disk');
+	await testAsync('the prebuilt spain overlay is loaded and is vector', async () => {
+		assert.ok(fetched.indexOf('outlines/outline-spain.json') !== -1,
+			'never asked for the prebuilt overlay; fetched: ' + fetched.join(', '));
 		const overlay = doc.querySelector('#mapSvg svg #mapOutline');
 		assert.ok(overlay, 'no #mapOutline was appended to the svg');
-		assert.match(overlay.getAttribute('href'), /outline-spain\.png$/);
-		const svg = doc.querySelector('#mapSvg svg');
-		assert.strictEqual(overlay.getAttribute('width'), String(svg.viewBox.baseVal.width));
+		assert.strictEqual(overlay.tagName.toLowerCase(), 'path',
+			'the overlay is still a raster <image>, so it will blur when zoomed');
+		const d = overlay.getAttribute('d');
+		assert.ok(d && d.length > 1000, 'overlay path data looks empty: ' + d);
+		assert.strictEqual(overlay.getAttribute('fill'), 'none');
+		assert.strictEqual(overlay.getAttribute('vector-effect'), 'non-scaling-stroke',
+			'without this the border is invisible at 1x or a smear when zoomed');
 	});
 
 	await testAsync('redrawing does not stack up overlays', async () => {
@@ -382,18 +410,116 @@ test('Borrar does not duplicate listeners', () => {
 	});
 
 	await testAsync('a map with no prebuilt file falls back without throwing', async () => {
-		// murcia ships no overlay, so this must take the runtime branch. It cannot
-		// finish here (no canvas backend) but it must not blow up either.
+		// murcia ships no overlay, so this must take the runtime raster branch. It
+		// cannot finish here (no canvas backend) but it must not blow up either.
 		const before = pageErrors.length;
 		window.provincia = 'murcia';
 		window.drawProvinceOutlines();
 		await sleep(50);
 		window.provincia = 'spain';
-		const asked = loadedImages.filter(i => String(i.src).indexOf('outline-murcia') !== -1);
-		assert.strictEqual(asked.length, 1, 'never tried outlines/outline-murcia.png');
-		assert.strictEqual(asked[0].exists, false);
+		assert.ok(fetched.indexOf('outlines/outline-murcia.json') !== -1,
+			'never tried outlines/outline-murcia.json');
 		assert.strictEqual(pageErrors.length, before,
 			'fallback threw: ' + pageErrors.slice(before));
+	});
+
+	console.log('\nmap zoom commits to the viewBox (so it stays sharp)');
+	const VB = {w: 1769.1083, h: 1006.6781};
+	const viewportEl = doc.getElementById('mapViewport');
+	const mapEl = doc.getElementById('mapSvg');
+
+	function touch(type, points) {
+		const event = new window.Event(type, {bubbles: true, cancelable: true});
+		Object.defineProperty(event, 'touches', {
+			value: points.map(p => ({clientX: p[0], clientY: p[1]}))
+		});
+		viewportEl.dispatchEvent(event);
+	}
+	function viewBoxOf() {
+		const vb = doc.querySelector('#mapSvg svg').getAttribute('viewBox');
+		return vb.trim().split(/\s+/).map(Number);
+	}
+
+	await testAsync('starts at the full map with no transform', async () => {
+		window.resetMapZoom();
+		const [x, y, w, h] = viewBoxOf();
+		assert.ok(Math.abs(w - VB.w) < 0.01 && Math.abs(h - VB.h) < 0.01,
+			'expected the natural viewBox, got ' + viewBoxOf().join(' '));
+		assert.strictEqual(x, 0);
+		assert.strictEqual(y, 0);
+		assert.strictEqual(window.mapZoomState().zoom, 1);
+	});
+
+	await testAsync('a 2x pinch halves the viewBox and keeps the centre put', async () => {
+		// Two fingers 111.8px apart, then spread to exactly twice that, with the
+		// midpoint pinned to the centre of the viewport.
+		touch('touchstart', [[145, 86], [245, 136]]);
+		touch('touchmove', [[95, 61], [295, 161]]);
+		assert.ok(Math.abs(window.mapZoomState().scale - 2) < 0.001,
+			'gesture scale is ' + window.mapZoomState().scale);
+		touch('touchend', []);
+
+		const [x, y, w, h] = viewBoxOf();
+		assert.ok(Math.abs(w - VB.w / 2) < 0.5,
+			'viewBox width should halve; got ' + w + ' of ' + VB.w);
+		assert.ok(Math.abs(h - VB.h / 2) < 0.5, 'viewBox height should halve; got ' + h);
+		// The map point under the viewport centre must not move.
+		assert.ok(Math.abs((x + w / 2) - VB.w / 2) < 1.0,
+			'centre drifted in x: ' + (x + w / 2) + ' vs ' + VB.w / 2);
+		assert.ok(Math.abs((y + h / 2) - VB.h / 2) < 1.0,
+			'centre drifted in y: ' + (y + h / 2) + ' vs ' + VB.h / 2);
+	});
+
+	await testAsync('the CSS transform is dropped once committed', async () => {
+		// This is the whole point: a lingering transform means the browser keeps
+		// showing a scaled bitmap instead of re-rendering the vector.
+		assert.strictEqual(mapEl.style.transform, '',
+			'transform still set to "' + mapEl.style.transform + '"');
+		const state = window.mapZoomState();
+		assert.strictEqual(state.scale, 1);
+		assert.strictEqual(state.tx, 0);
+		assert.strictEqual(state.ty, 0);
+		assert.ok(Math.abs(state.zoom - 2) < 0.01, 'total zoom is ' + state.zoom);
+	});
+
+	await testAsync('will-change is not left pinned after the gesture', async () => {
+		assert.strictEqual(viewportEl.classList.contains('gesturing'), false,
+			'the gesturing class survived, so the layer stays rasterised');
+	});
+
+	await testAsync('zoom cannot go below the full map', async () => {
+		// Pinch inwards hard from the 2x view: it must stop at the whole map.
+		touch('touchstart', [[145, 86], [245, 136]]);
+		touch('touchmove', [[190, 108], [200, 114]]);
+		touch('touchend', []);
+		const [x, y, w, h] = viewBoxOf();
+		assert.ok(w <= VB.w + 0.01, 'viewBox grew past the map: ' + w);
+		assert.ok(x >= -0.01 && y >= -0.01, 'panned outside the map: ' + x + ',' + y);
+		assert.ok(window.mapZoomState().zoom >= 1 - 1e-9);
+	});
+
+	await testAsync('double tap returns to the full map', async () => {
+		touch('touchstart', [[145, 86], [245, 136]]);
+		touch('touchmove', [[95, 61], [295, 161]]);
+		touch('touchend', []);
+		assert.ok(window.mapZoomState().zoom > 1.5, 'setup failed to zoom in');
+		touch('touchend', []);
+		touch('touchend', []);
+		const [x, y, w, h] = viewBoxOf();
+		assert.ok(Math.abs(w - VB.w) < 0.01, 'double tap did not reset; w=' + w);
+		assert.strictEqual(mapEl.style.transform, '');
+	});
+
+	await testAsync('zoom is capped rather than running away', async () => {
+		for (let i = 0; i < 12; i++) {
+			touch('touchstart', [[145, 86], [245, 136]]);
+			touch('touchmove', [[45, 36], [345, 186]]);
+			touch('touchend', []);
+		}
+		const zoom = window.mapZoomState().zoom;
+		assert.ok(zoom <= 14.001, 'zoom ran past the cap: ' + zoom);
+		assert.ok(zoom > 10, 'zoom should have reached the cap, got ' + zoom);
+		window.resetMapZoom();
 	});
 
 	console.log('\nno unexpected errors');

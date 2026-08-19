@@ -228,21 +228,76 @@ function setupDataModal() {
 
 /* --- map pinch zoom ------------------------------------------------------- */
 
+// Zoom happens in two stages, because neither one alone works well here.
+//
+// A CSS transform is cheap and smooth, but the browser rasterises the layer once
+// and then scales that bitmap, so the map goes soft exactly when you magnify it
+// to read a small municipio. Rewriting the SVG viewBox instead re-renders the
+// vector at full resolution and stays perfectly sharp, but it repaints 13,904
+// paths, which is far too slow for every frame of a pinch.
+//
+// So: transform during the gesture, then commit the equivalent viewBox once the
+// fingers come up. Sharp whenever you are actually looking at it.
 function setupMapZoom() {
 	var viewport = document.getElementById("mapViewport");
 	var map = document.getElementById("mapSvg");
 	if (!viewport || !map) return;
 
-	var MIN_SCALE = 1;
-	var MAX_SCALE = 14;
-	var scale = 1, tx = 0, ty = 0;
-	var pinch = null;      // {d0, s0, px, py} while two fingers are down
-	var pan = null;        // {x, y, tx, ty} while dragging a zoomed map
+	var MAX_ZOOM = 14;
+	var natural = null;              // the map's own viewBox
+	var view = null;                 // the committed viewBox, in map units
+	var scale = 1, tx = 0, ty = 0;   // gesture transform, on top of `view`
+	var pinch = null;
+	var pan = null;
 	var lastTap = 0;
+	var wheelTimer = null;
 
-	function clamp() {
-		if (scale < MIN_SCALE) scale = MIN_SCALE;
-		if (scale > MAX_SCALE) scale = MAX_SCALE;
+	function svgEl() {
+		return map.querySelector("svg");
+	}
+
+	// Resolved lazily: the svg only exists once drawMap() has run, and drawMap
+	// replaces it wholesale on every redraw.
+	function sync() {
+		var svg = svgEl();
+		if (!svg) return false;
+		var vb = svg.viewBox.baseVal;
+		if (!vb || !vb.width) return false;
+		if (!natural) {
+			natural = {x: vb.x, y: vb.y, w: vb.width, h: vb.height};
+			view = {x: vb.x, y: vb.y, w: vb.width, h: vb.height};
+			return true;
+		}
+		// A redraw hands back a pristine svg carrying the original viewBox. Detect
+		// that by the viewBox no longer matching the committed view and start over
+		// from the full map rather than leaving the two out of step.
+		if (Math.abs(vb.width - view.w) > 1e-6 || Math.abs(vb.x - view.x) > 1e-6) {
+			if (Math.abs(vb.width - natural.w) < 1e-6) {
+				view = {x: vb.x, y: vb.y, w: vb.width, h: vb.height};
+				scale = 1; tx = 0; ty = 0;
+				map.style.transform = "";
+				viewport.classList.remove("zoomed");
+			}
+		}
+		return true;
+	}
+
+	function totalZoom() {
+		return view ? natural.w / view.w : 1;
+	}
+
+	function minGestureScale() {
+		return 1 / totalZoom();          // cannot zoom out past the full map
+	}
+
+	function maxGestureScale() {
+		return MAX_ZOOM / totalZoom();
+	}
+
+	function clampTransform() {
+		var lo = minGestureScale(), hi = maxGestureScale();
+		if (scale < lo) scale = lo;
+		if (scale > hi) scale = hi;
 		var vw = viewport.clientWidth;
 		var vh = viewport.clientHeight;
 		var cw = map.offsetWidth * scale;
@@ -251,19 +306,77 @@ function setupMapZoom() {
 		ty = ch <= vh ? (vh - ch) / 2 : Math.min(0, Math.max(vh - ch, ty));
 	}
 
-	function apply() {
-		clamp();
+	function applyTransform() {
+		clampTransform();
 		map.style.transform = "translate(" + tx + "px, " + ty + "px) scale(" + scale + ")";
-		// Only claim the gesture once zoomed in, so at 1x a vertical drag still
-		// scrolls the page instead of being swallowed by the map.
-		viewport.classList.toggle("zoomed", scale > 1.001);
+		viewport.classList.toggle("zoomed", totalZoom() * scale > 1.001);
+	}
+
+	function writeViewBox() {
+		var svg = svgEl();
+		if (!svg) return;
+		svg.setAttribute("viewBox",
+			view.x + " " + view.y + " " + view.w + " " + view.h);
+	}
+
+	// Fold the gesture transform into the viewBox and drop the transform, so the
+	// vector is re-rendered at the new scale instead of being a scaled bitmap.
+	function commit() {
+		if (!sync()) return;
+		var w = map.offsetWidth;
+		var h = map.offsetHeight;
+		if (!w || !h || scale === 1 && tx === 0 && ty === 0) {
+			map.style.transform = "";
+			return;
+		}
+
+		var fx = view.w / w;             // map units per layout pixel
+		var fy = view.h / h;
+		view = {
+			x: view.x - (tx / scale) * fx,
+			y: view.y - (ty / scale) * fy,
+			w: view.w / scale,
+			h: view.h / scale
+		};
+
+		// Never wider than the whole map, never narrower than the zoom cap.
+		if (view.w > natural.w) {
+			view.w = natural.w;
+			view.h = natural.h;
+		}
+		var minW = natural.w / MAX_ZOOM;
+		if (view.w < minW) {
+			var k = minW / view.w;
+			view.w *= k;
+			view.h *= k;
+		}
+		view.x = Math.max(natural.x, Math.min(natural.x + natural.w - view.w, view.x));
+		view.y = Math.max(natural.y, Math.min(natural.y + natural.h - view.h, view.y));
+
+		scale = 1; tx = 0; ty = 0;
+		writeViewBox();
+		map.style.transform = "";
+		viewport.classList.toggle("zoomed", totalZoom() > 1.001);
 	}
 
 	function reset() {
-		scale = 1;
-		tx = 0;
-		ty = 0;
-		apply();
+		if (!sync()) return;
+		view = {x: natural.x, y: natural.y, w: natural.w, h: natural.h};
+		scale = 1; tx = 0; ty = 0;
+		writeViewBox();
+		map.style.transform = "";
+		viewport.classList.remove("zoomed");
+	}
+
+	function beginGesture() {
+		// will-change is set only while a gesture runs: left on permanently it pins
+		// a rasterised layer and the map never sharpens back up.
+		viewport.classList.add("gesturing");
+	}
+
+	function endGesture() {
+		viewport.classList.remove("gesturing");
+		commit();
 	}
 
 	function distance(a, b) {
@@ -279,19 +392,11 @@ function setupMapZoom() {
 		};
 	}
 
-	function zoomAround(mx, my, nextScale) {
-		// Keep whatever content point sits under (mx, my) exactly where it is.
-		var px = (mx - tx) / scale;
-		var py = (my - ty) / scale;
-		scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, nextScale));
-		tx = mx - px * scale;
-		ty = my - py * scale;
-		apply();
-	}
-
 	viewport.addEventListener("touchstart", function(event) {
+		if (!sync()) return;
 		if (event.touches.length === 2) {
 			event.preventDefault();
+			beginGesture();
 			var m = midpoint(event.touches[0], event.touches[1]);
 			pinch = {
 				d0: distance(event.touches[0], event.touches[1]) || 1,
@@ -300,8 +405,9 @@ function setupMapZoom() {
 				py: (m.y - ty) / scale
 			};
 			pan = null;
-		} else if (event.touches.length === 1 && scale > 1.001) {
+		} else if (event.touches.length === 1 && totalZoom() * scale > 1.001) {
 			event.preventDefault();
+			beginGesture();
 			pan = {x: event.touches[0].clientX, y: event.touches[0].clientY, tx: tx, ty: ty};
 		}
 	}, {passive: false});
@@ -311,15 +417,15 @@ function setupMapZoom() {
 			event.preventDefault();
 			var m = midpoint(event.touches[0], event.touches[1]);
 			var next = pinch.s0 * (distance(event.touches[0], event.touches[1]) / pinch.d0);
-			scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next));
+			scale = Math.min(maxGestureScale(), Math.max(minGestureScale(), next));
 			tx = m.x - pinch.px * scale;
 			ty = m.y - pinch.py * scale;
-			apply();
+			applyTransform();
 		} else if (pan && event.touches.length === 1) {
 			event.preventDefault();
 			tx = pan.tx + (event.touches[0].clientX - pan.x);
 			ty = pan.ty + (event.touches[0].clientY - pan.y);
-			apply();
+			applyTransform();
 		}
 	}, {passive: false});
 
@@ -327,15 +433,17 @@ function setupMapZoom() {
 		if (event.touches.length === 0) {
 			var wasGesture = pinch !== null || pan !== null;
 			var now = Date.now();
-			// Double tap anywhere on the map returns to the full view.
-			if (!wasGesture && now - lastTap < 300) {
-				reset();
-				lastTap = 0;
-			} else {
-				lastTap = now;
-			}
 			pinch = null;
 			pan = null;
+			if (wasGesture) {
+				endGesture();
+			} else if (now - lastTap < 300) {
+				// Double tap anywhere on the map returns to the full view.
+				reset();
+				lastTap = 0;
+				return;
+			}
+			lastTap = now;
 		} else if (event.touches.length === 1 && pinch) {
 			// Lifting one finger of a pinch hands over to a one-finger pan.
 			pinch = null;
@@ -343,15 +451,32 @@ function setupMapZoom() {
 		}
 	});
 
-	// Ctrl/Cmd + wheel zoom, so the same code is testable on a desktop.
+	// Ctrl/Cmd + wheel zoom, so the same code path is reachable on a desktop.
 	viewport.addEventListener("wheel", function(event) {
 		if (!event.ctrlKey && !event.metaKey) return;
+		if (!sync()) return;
 		event.preventDefault();
+		beginGesture();
 		var box = viewport.getBoundingClientRect();
-		zoomAround(event.clientX - box.left, event.clientY - box.top,
-			scale * (event.deltaY < 0 ? 1.12 : 1 / 1.12));
+		var mx = event.clientX - box.left, my = event.clientY - box.top;
+		var px = (mx - tx) / scale, py = (my - ty) / scale;
+		var next = scale * (event.deltaY < 0 ? 1.12 : 1 / 1.12);
+		scale = Math.min(maxGestureScale(), Math.max(minGestureScale(), next));
+		tx = mx - px * scale;
+		ty = my - py * scale;
+		applyTransform();
+		// A wheel has no natural end, so settle shortly after it stops moving.
+		if (wheelTimer) clearTimeout(wheelTimer);
+		wheelTimer = setTimeout(function() { wheelTimer = null; endGesture(); }, 180);
 	}, {passive: false});
 
-	window.addEventListener("resize", apply);
+	window.addEventListener("resize", function() {
+		if (sync()) applyTransform();
+	});
+
 	window.resetMapZoom = reset;
+	window.mapZoomState = function() {
+		return {natural: natural, view: view, scale: scale, tx: tx, ty: ty,
+			zoom: totalZoom()};
+	};
 }

@@ -230,36 +230,67 @@ function drawMap() {
 	});
 }
 
-// The overlay draws a black line only where two neighbouring pixels have
-// different province colors, i.e. exactly on province borders (no line is drawn
-// between municipalities of the same province).
+// Province borders are drawn as an overlay on top of the municipio fills, so no
+// line appears between two municipios of the same province.
 //
-// It is identical on every launch: the SVG is serialized with only its
-// presentation attributes, so the external .selected rule never applies and the
-// result does not depend on what has been guessed. The spain overlay is
-// therefore prebuilt by tools/build_outlines.py and simply loaded. The other
-// maps have no prebuilt file and fall through to computing it here.
+// The spain overlay is prebuilt by tools/build_outlines.py as exact vector paths
+// and simply loaded here: it stays sharp at any zoom, and it is complete, which
+// the old raster version was not (it missed borders between adjacent provinces
+// that happened to share one of the map's four fill colours).
+//
+// Everything else falls through to computing a raster overlay at runtime, which
+// is what murcia, madrid and cadiz still use.
 function drawProvinceOutlines() {
 	var container = document.getElementById("mapSvg");
 	var svg = container.querySelector("svg");
 	if (!svg) return;
 
 	var vb = svg.viewBox.baseVal;
-	var prebuilt = new Image();
-	prebuilt.onload = function() {
-		appendOutline(svg, vb, prebuilt.src);
-	};
-	prebuilt.onerror = function() {
+	if (typeof fetch !== "function") {
 		computeProvinceOutlines(svg, vb);
-	};
-	prebuilt.src = "outlines/outline-" + provincia + ".png";
+		return;
+	}
+
+	fetch("outlines/outline-" + provincia + ".json")
+		.then(function(response) {
+			if (!response.ok) throw new Error("sin overlay prebuilt");
+			return response.json();
+		})
+		.then(function(data) {
+			if (!data || !data.d) throw new Error("overlay vacío");
+			appendVectorOutline(svg, data.d);
+		})
+		.catch(function() {
+			computeProvinceOutlines(svg, vb);
+		});
 }
 
-function appendOutline(svg, vb, href) {
-	// Guard against two overlays racing each other onto the same svg.
+function removeExistingOutline(svg) {
+	// Guards against two overlays racing each other onto the same svg.
 	var previous = svg.querySelector("#mapOutline");
 	if (previous) previous.remove();
+}
 
+function appendVectorOutline(svg, d) {
+	removeExistingOutline(svg);
+	var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+	path.id = "mapOutline";
+	path.setAttribute("d", d);
+	path.setAttribute("fill", "none");
+	path.setAttribute("stroke", "#3a3a3a");
+	// non-scaling-stroke keeps the border one hairline wide on screen whatever
+	// the zoom. Without it the width is in user units, so it would either be
+	// invisible at 1x or a fat smear when zoomed in.
+	path.setAttribute("vector-effect", "non-scaling-stroke");
+	path.setAttribute("stroke-width", "0.7");
+	path.setAttribute("stroke-linejoin", "round");
+	path.setAttribute("stroke-linecap", "round");
+	path.setAttribute("pointer-events", "none");
+	svg.appendChild(path);
+}
+
+function appendRasterOutline(svg, vb, href) {
+	removeExistingOutline(svg);
 	var outline = document.createElementNS("http://www.w3.org/2000/svg", "image");
 	outline.id = "mapOutline";
 	outline.setAttribute("x", "0");
@@ -272,8 +303,10 @@ function appendOutline(svg, vb, href) {
 	svg.appendChild(outline);
 }
 
-// Raster edge-detection fallback. Roughly 7 million pixels of work, which is why
-// the spain overlay is shipped prebuilt instead.
+// Raster edge-detection fallback: draws a line only where two neighbouring
+// pixels have different province colours. Roughly 7 million pixels of work, and
+// the result is a bitmap that softens when magnified, which is why spain ships a
+// prebuilt vector overlay instead.
 function computeProvinceOutlines(svg, vb) {
 	var SCALE = 2;
 	var W = Math.round(vb.width * SCALE);
@@ -310,7 +343,7 @@ function computeProvinceOutlines(svg, vb) {
 			}
 		}
 		ctx.putImageData(new ImageData(out, W, H), 0, 0);
-		appendOutline(svg, vb, canvas.toDataURL("image/png"));
+		appendRasterOutline(svg, vb, canvas.toDataURL("image/png"));
 	};
 	img.onerror = function() { URL.revokeObjectURL(url); };
 	img.src = url;

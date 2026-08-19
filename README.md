@@ -98,8 +98,24 @@ La importación **suma** municipios a los que ya tengas, nunca los sustituye.
 | `sw.js` | Service worker: arranque instantáneo y modo sin conexión |
 | `map.js` | Los 4 mapas SVG (16 MB; España son 13.904 paths) |
 | `municipios.js` | 8.481 entradas con nombre, provincia, población y área |
-| `outlines/` | Overlay de fronteras provinciales precalculado |
+| `outlines/` | Fronteras provinciales precalculadas como vector |
 | `icons/` | Iconos generados desde la geometría real del mapa |
+
+## Nitidez del mapa al ampliar
+
+Dos cosas limitaban la calidad al hacer zoom, y ambas están resueltas.
+
+**El zoom rasterizaba.** `will-change: transform` promocionaba el mapa a una capa
+de composición rasterizada a la escala inicial, así que ampliar escalaba ese
+bitmap en vez de re-renderizar el vector. Ahora el gesto usa `transform` (fluido,
+por GPU) y al levantar los dedos se **traslada el zoom al `viewBox` del SVG**, que
+fuerza un re-render vectorial a resolución completa. Nítido siempre que estás
+mirándolo, que es cuando importa; solo el propio gesto usa el camino rápido.
+
+**El overlay de fronteras era un PNG** de 3538 px estirado sobre el mapa, con
+techo de resolución propio. Ahora son paths vectoriales con
+`vector-effect="non-scaling-stroke"`, que mantiene la línea con el mismo grosor en
+pantalla a cualquier zoom.
 
 ## Herramientas de build
 
@@ -111,14 +127,33 @@ python tools/build_icons.py      # iconos, desde la silueta real de España
 python tools/build_outlines.py   # overlay de fronteras provinciales
 ```
 
-`build_outlines.py` existe por rendimiento. En origen, el overlay se calculaba en
-cada arranque: serializar los 15 MB de SVG, rasterizarlos a 3538x2013 y recorrer
-**7,1 millones de píxeles** en JavaScript. El resultado nunca cambia (el SVG
-serializado solo lleva sus atributos de presentación, así que la regla
-`.selected` no se aplica), de modo que ahora se genera una vez y se sirve como un
-PNG de 80 KB. `main.js` recae en el cálculo en runtime si el archivo no está, que
-es el caso de los mapas de Murcia, Madrid y Cádiz: esos envuelven sus paths en un
-`<g>` con `transform` y `clipPath` que el script no implementa.
+`build_outlines.py` calcula las fronteras **topológicamente**, no por píxeles.
+Trocea cada polígono municipal en aristas y las clasifica:
+
+- arista usada por dos polígonos de la misma provincia → interior, se descarta;
+- usada por dos polígonos de provincias distintas → frontera provincial;
+- usada una sola vez → borde exterior: costa o frontera nacional.
+
+Lo que lo hace viable es que el **86% de las aristas aparecen exactamente dos
+veces**: la geometría comparte vértices de verdad, no son trazados
+independientes. De 1.003.950 aristas únicas quedan 224.792, que se encadenan en
+polilíneas y se simplifican con Douglas-Peucker. La simplificación no es solo por
+tamaño: el original es un trazado ráster de escalones de 0,1 unidades, y
+colapsarlos es lo que hace que las fronteras se vean limpias y no pixeladas.
+
+Resultado: 275 KB (70 KB gzipped, menos que el PNG que sustituyó) y sin techo de
+resolución. Además queda **completo**: la versión ráster se perdía las fronteras
+entre provincias vecinas que compartían uno de los cuatro colores del mapa.
+
+Hay un filtro `MIN_EXTENT`: el mapa contiene miles de micro-polígonos —`path3` es
+un cuadrado de 0,09 × 0,075 unidades— cuyas aristas son frontera legítima pero se
+ven como moteado por las provincias. No es un problema de encaje de vértices:
+pasar `QUANT` de 1e-4 a 2e-2 cambia el recuento en menos del 3%, la geometría es
+así de pequeña.
+
+`main.js` recae en el cálculo ráster en runtime si el archivo no está, que es el
+caso de los mapas de Murcia, Madrid y Cádiz: esos envuelven sus paths en un `<g>`
+con `transform` y `clipPath` que el script no implementa.
 
 ## Cómo se actualiza la app instalada
 
@@ -151,13 +186,15 @@ node tools/test_storage.js quiz-municipios   # 28 pruebas de la capa de datos
 node tools/test_sw.js quiz-municipios        # 12 pruebas del service worker
 npm install jsdom fake-indexeddb             # solo para los dos siguientes
 node tools/test_css.js quiz-municipios       #  4 pruebas de cascada CSS
-node tools/test_app.js quiz-municipios       # 34 pruebas de la app completa
+node tools/test_app.js quiz-municipios       # 41 pruebas de la app completa
 ```
 
 El test de integración arranca `index.html` de verdad en jsdom con los 16 MB de
 mapa y los 8.481 municipios, y comprueba aciertos, normalización de acentos,
-duplicados, las ocho ordenaciones, exportar/importar, Borrar y la recuperación
-del progreso tras un borrado de `localStorage`.
+duplicados, las ocho ordenaciones, exportar/importar, Borrar, la recuperación del
+progreso tras un borrado de `localStorage`, y la matemática del zoom: que un
+pinch de 2x divide el `viewBox` por dos sin desplazar el centro, que el
+`transform` se suelta al confirmar y que el zoom está acotado en ambos extremos.
 
 `test_sw.js` es el que cubre lo de arriba contra un mock de la Cache API:
 comprueba que un redespliegue del shell entra solo, que los 17 MB no se vuelven

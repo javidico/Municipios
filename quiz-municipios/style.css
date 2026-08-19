@@ -294,6 +294,13 @@ button, select, input, textarea {
 
 .map {
 	transform-origin: 0 0;
+}
+
+/* will-change only while a gesture is in flight. Left on permanently it promotes
+   the map to a compositing layer rasterised at the initial scale, and every zoom
+   then scales that bitmap instead of re-rendering the vector, which is what made
+   the magnified map look soft. */
+.mapViewport.gesturing .map {
 	will-change: transform;
 }
 
