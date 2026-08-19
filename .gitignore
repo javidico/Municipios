@@ -1,0 +1,10 @@
+# Build and test noise
+__pycache__/
+*.pyc
+node_modules/
+package-lock.json
+
+# Session artefacts from earlier tooling runs
+.playwright-mcp/
+.omo/
+map-check.png

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="es">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+		<title>Quiz Municipios</title>
+
+		<meta name="description" content="Pon a prueba tu conocimiento geográfico nombrando el mayor número posible de municipios españoles">
+		<meta name="theme-color" content="#ffffff">
+
+		<link rel="manifest" href="manifest.webmanifest">
+		<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+		<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+		<link rel="icon" href="icons/favicon.ico" sizes="any">
+
+		<meta name="mobile-web-app-capable" content="yes">
+		<meta name="apple-mobile-web-app-capable" content="yes">
+		<meta name="apple-mobile-web-app-status-bar-style" content="default">
+		<meta name="apple-mobile-web-app-title" content="Municipios">
+
+		<link rel="stylesheet" href="style.css">
+		<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=sort">
+
+		<script type="text/javascript" src="storage.js"></script>
+		<script type="text/javascript" src="shell.js"></script>
+		<script type="text/javascript" src="main.js"></script>
+		<script type="text/javascript" src="map.js"></script>
+		<script type="text/javascript" src="municipios.js"></script>
+
+		<meta property="og:url"                content="https://jorgeduarte22.github.io/quiz-municipios/index.html" />
+		<meta property="og:type"               content="website" />
+		<meta property="og:title"              content="¿Cuántos municipios eres capaz de nombrar?" />
+		<meta property="og:description"        content="Pon a prueba tu conocimiento geográfico nombrando el mayor número posible de municipios españoles" />
+		<meta property="og:image"              content="https://jorgeduarte22.github.io/quiz-municipios/preview.png" />
+	</head>
+	<body>
+		<h1>¿Cuántos municipios eres capaz de nombrar?</h1>
+		<div class="sendWrapper">
+			<input id="municipioInput" type="text" spellcheck="false" autocomplete="off"
+				autocorrect="off" autocapitalize="off" enterkeyhint="send"
+				placeholder="Introduce el nombre de un municipio">
+			<button id="sendButton" class="sendButton">Enviar</button>
+		</div>
+
+		<div class="mapViewport" id="mapViewport">
+			<div class="map" id="mapSvg">Loading...</div>
+		</div>
+		<p class="mapHint" id="mapHint">Pellizca para ampliar · doble toque para restablecer</p>
+
+		<div class="cardsWrapper">
+			<div class="card">
+				<div class="municipiosHeader">
+					<h2>Municipios</h2>
+				</div>
+				<select id="selectSorting" class="cardSelect">
+					<option value="order-desc">Orden (Descendente)</option>
+					<option value="order-asc">Orden (Ascendente)</option>
+					<option value="population-desc">Población (Descendente)</option>
+					<option value="population-asc">Población (Ascendente)</option>
+					<option value="area-desc">Área (Descendente)</option>
+					<option value="area-asc">Área (Ascendente)</option>
+				</select>
+				<ol id="municipiosList" type="1"></ol>
+			</div>
+			<div class="card">
+				<h2>Estadísticas</h2>
+				<select id="selectStatsProvincia" class="cardSelect">
+				</select>
+				<ul id="stats">
+					<li id="numberOfMunicipios"></li>
+					<li id="capitals"></li>
+					<li id="numberOfBigMunicipios"></li>
+					<li id="numberOfMediumMunicipios"></li>
+					<li id="totalArea"></li>
+					<li id="totalPopulation"></li>
+				</ul>
+			</div>
+			<div class="card">
+				<h2>Datos</h2>
+				<p class="cardNote" id="storageNote">Tu progreso se guarda en este dispositivo.</p>
+				<div class="dataButtons">
+					<button id="exportButton" class="dataButton">Exportar copia</button>
+					<button id="importButton" class="dataButton">Importar copia</button>
+				</div>
+			</div>
+		</div>
+
+		<button id="borrarButton" class="borrarButton">Borrar</button>
+
+		<div class="installHint hidden" id="installHint">
+			<span><strong>Instálala en tu iPhone:</strong> pulsa Compartir y luego «Añadir a pantalla de inicio». Así deja de perder el progreso.</span>
+			<button id="dismissInstall" class="dismissInstall" aria-label="Descartar">&times;</button>
+		</div>
+
+		<footer>
+			Juego original de <a href="https://github.com/jorgeduarte22/quiz-municipios">jorgeduarte22</a>.
+			Fuente de los datos: <a href="https://es.wikipedia.org/wiki/Anexo:Municipios_de_la_Regi%C3%B3n_de_Murcia">Wikipedia</a> y <a href="https://www.ign.es/web/ign/portal/rcc-nomenclator-nacional">IGN</a>.
+		</footer>
+
+		<div class="modalBackdrop hidden" id="dataModal">
+			<div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+				<h3 id="modalTitle">Copia de seguridad</h3>
+				<p class="modalHelp" id="modalHelp"></p>
+				<textarea id="modalText" spellcheck="false" autocomplete="off"
+					autocorrect="off" autocapitalize="off"></textarea>
+				<p class="modalStatus" id="modalStatus"></p>
+				<div class="modalButtons">
+					<button id="modalPrimary" class="modalPrimary"></button>
+					<button id="modalCopy">Copiar</button>
+					<button id="modalShare">Compartir</button>
+					<button id="modalDownload">Descargar</button>
+					<button id="modalClose">Cerrar</button>
+				</div>
+			</div>
+		</div>
+	</body>
+</html>

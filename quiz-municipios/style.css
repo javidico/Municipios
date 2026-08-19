@@ -1,0 +1,473 @@
+body {
+	margin: 0;
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	margin: auto;
+	font-family: Lato,HelveticaNeueBold,HelveticaNeue-Bold,"Helvetica Neue Bold",HelveticaBold,Helvetica-Bold,"Helvetica Bold",HelveticaNeue,"Helvetica Neue",Helvetica,Arial,sans-serif;
+}
+
+h1 {
+	padding-top: 15px;
+	text-align: center;
+}
+
+input {
+	width: 300px;
+	max-width: 100%;
+	background-color: #fff;
+	min-height: 40px;
+	padding: 3px 7px;
+	line-height: normal;
+	border: 1px solid #a6a6a6;
+	border-top-color: #949494;
+	border-radius: 5px;
+	box-shadow: 0 1px 0 rgb(255 255 255 / 50%), 0 1px 0 rgb(0 0 0 / 7%) inset;
+	outline: 0;
+	color: #111;
+	/* Must stay >= 16px: iOS Safari zooms the whole page in when it focuses a
+	   field with a smaller font, which on this layout hides the map. */
+	font-size: 16px;
+	margin-top: 5px;
+    margin-bottom: 5px;
+}
+
+.cardSelect {
+	appearance: none;
+	background-color: cornflowerblue;
+	padding: 5px;
+	width: 95%;
+}
+
+input:hover {
+	box-shadow: rgb(231 238 236) 0px 0px 0px 3px;
+}
+
+input:focus{
+	border-color: darkblue;
+	box-shadow: 0 0 3px 2px cornflowerblue;
+}
+
+@keyframes wrongGuess {
+	50% {border-color: red}
+	50% {box-shadow: 0 0 5px 3px red}
+}
+
+@keyframes rightGuess {
+	50% {border-color: green}
+	50% {box-shadow: 0 0 5px 3px green}
+}
+
+@keyframes duplicateGuess {
+	50% {border-color: orange}
+	50% {box-shadow: 0 0 5px 3px orange}
+}
+
+.animation-wrongGuess {
+	animation: wrongGuess 1s ease-in;
+}
+
+.animation-rightGuess {
+	animation: rightGuess 1s ease-in;
+}
+
+.animation-duplicateGuess {
+	animation: duplicateGuess 1s ease-in;
+}
+
+.map {
+	position: relative;
+	margin-top: 15px;
+	margin-bottom: 15px;
+	margin-left: 15px;
+	margin-right: 15px;
+}
+
+.selected {
+	fill: #4CBB17 !important;
+}
+
+.municipio {
+	fill: azure;
+	fill-rule:evenodd;
+}
+
+.borrarButton {
+	display: inline-block;
+	outline: 0;
+	cursor: pointer;
+	border-radius: 5px;
+	box-shadow: 0 2px 5px 0 rgb(213 217 217 / 50%);
+	border: 0px solid darkred;
+	font-size: 15px;
+	min-height: 31px;
+	padding: 0 11px;
+	text-align: center;
+	width: 100%;
+	min-width: 200px;
+	max-width: 300px;
+	font-weight: 500;
+	color: black;
+	background-color: red;
+	margin-bottom: 10px;
+	margin-top: 5px;
+}
+
+button, select {
+	background-color: cornflowerblue;
+	text-align: center;
+	color: black;
+	border: 0px solid cornflowerblue;
+	box-shadow: 0 2px 5px 0 rgb(213 217 217 / 50%);
+	border-radius: 5px;
+	cursor: pointer;
+	outline: 0;
+}
+
+button:hover, select:hover {
+	background-color: rgba(17, 17, 176, 0.819);
+	color: white;
+}
+
+.sendButton {
+	font-size: 15px;
+	min-height: 31px;
+	padding: 0 11px;
+	text-align: center;
+	font-weight: 500;
+	margin-top: 5px;
+    margin-bottom: 5px;
+}
+
+.borrarButton:hover .borrarButton:active .borrarButton:focus {
+	background-color: indianred;
+}
+
+.sendButton:hover .sendButton:active .sendButton:focus {
+	background-color: darkslateblue;
+}
+
+footer {
+    margin-top: auto;
+    padding-bottom: 10px;
+    padding-top: 10px;
+    background-color: gainsboro;
+    width: 100%;
+    text-align: center;
+    color: black;
+	font-size: 15px;
+}
+
+a {
+	color: black;
+	text-decoration: none;
+	cursor: pointer;
+}
+
+.card {
+	min-width: 300px;
+	max-width: 300px;
+	margin-bottom: 5px;
+	margin-top: 5px;
+	margin-left: 5px;
+	margin-right: 5px;
+	border: 1px solid gainsboro;
+	border-radius: 5px;
+	text-align: center;
+}
+
+h2 {
+	width: 100%;
+	margin-left: auto;
+	margin-right: auto;
+	text-align: center;
+}
+
+.listItem {
+	padding-left: 0px;
+	align-content: center;
+	text-align: left;
+}
+
+.cardsWrapper {
+	display: flex;
+	flex-direction: row;
+	flex-wrap: wrap;
+	justify-content: center;
+	align-items: flex-start;
+}
+
+.municipiosHeader {
+	position: relative;
+	flex-direction: row;
+}
+
+.hidden {
+	display: none;
+}
+
+li {
+	padding-right: 15px;
+	height: auto;
+	margin-top: 10px;
+	margin-bottom: 5px;
+}
+
+.sendWrapper {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+}
+
+svg {
+	width: 100%;
+}
+/* ==========================================================================
+   Installed-app / iPhone layer
+   Everything below exists so the page behaves like an app when launched from
+   the home screen rather than like a page in a browser tab.
+   ========================================================================== */
+
+html {
+	/* Stop iOS from inflating text in landscape. */
+	-webkit-text-size-adjust: 100%;
+	text-size-adjust: 100%;
+}
+
+body {
+	/* Respect the notch / home indicator when display-mode is standalone. */
+	padding-left: env(safe-area-inset-left);
+	padding-right: env(safe-area-inset-right);
+	padding-bottom: env(safe-area-inset-bottom);
+	/* Kill the page-level rubber-band so only the map pans. */
+	overscroll-behavior-y: contain;
+}
+
+h1 {
+	font-size: clamp(1.1rem, 5vw, 2rem);
+	padding-left: 12px;
+	padding-right: 12px;
+	margin-bottom: 4px;
+}
+
+/* Hover styles are a liability on touch: iOS latches them after a tap and the
+   button stays highlighted. Only apply them where hovering is real. */
+@media (hover: none) {
+	input:hover { box-shadow: 0 1px 0 rgb(255 255 255 / 50%), 0 1px 0 rgb(0 0 0 / 7%) inset; }
+	button:hover, select:hover { background-color: cornflowerblue; color: black; }
+}
+
+button, select, input, textarea {
+	font-family: inherit;
+	/* Removes the 300ms tap delay and the grey flash on iOS. */
+	touch-action: manipulation;
+	-webkit-tap-highlight-color: transparent;
+}
+
+.sendWrapper {
+	width: 100%;
+	max-width: 420px;
+	padding: 0 12px;
+	box-sizing: border-box;
+}
+
+#municipioInput { flex: 1 1 auto; }
+
+.sendButton { min-height: 40px; flex: 0 0 auto; }
+
+/* --- map: pinch to zoom ---------------------------------------------------- */
+
+.mapViewport {
+	width: 100%;
+	overflow: hidden;
+	position: relative;
+	/* pan-y leaves vertical page scrolling alone while still denying the browser
+	   its own pinch-zoom, which the map handles itself. */
+	touch-action: pan-y;
+}
+
+/* Once zoomed in, the map owns every gesture so one finger pans it. */
+.mapViewport.zoomed {
+	touch-action: none;
+}
+
+.map {
+	transform-origin: 0 0;
+	will-change: transform;
+}
+
+.mapHint {
+	margin: 0 0 6px;
+	font-size: 12px;
+	color: #666;
+	text-align: center;
+}
+
+@media (hover: hover) {
+	.mapHint { display: none; }
+}
+
+/* --- cards ---------------------------------------------------------------- */
+
+.card {
+	min-width: 0;
+	width: 100%;
+	max-width: 320px;
+	box-sizing: border-box;
+}
+
+.cardNote {
+	font-size: 13px;
+	color: #555;
+	margin: 0 10px 8px;
+	text-align: left;
+}
+
+.dataButtons {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	justify-content: center;
+	padding: 0 10px 10px;
+}
+
+.dataButton {
+	flex: 1 1 auto;
+	min-height: 40px;
+	padding: 0 12px;
+	font-size: 14px;
+}
+
+.borrarButton { min-height: 44px; }
+
+/* --- install hint --------------------------------------------------------- */
+
+.installHint {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: calc(100% - 24px);
+	max-width: 520px;
+	margin: 4px 12px 12px;
+	padding: 10px 12px;
+	box-sizing: border-box;
+	background-color: #0e2a47;
+	color: #fff;
+	border-radius: 8px;
+	font-size: 13px;
+	line-height: 1.35;
+}
+
+.installHint a { color: #9fd67a; }
+
+.dismissInstall {
+	background: none;
+	box-shadow: none;
+	color: #fff;
+	font-size: 22px;
+	line-height: 1;
+	padding: 0 4px;
+	min-height: 32px;
+	min-width: 32px;
+	flex: 0 0 auto;
+}
+
+@media (hover: none) {
+	.dismissInstall:hover { background: none; color: #fff; }
+}
+
+/* --- export / import modal ------------------------------------------------ */
+
+.modalBackdrop {
+	position: fixed;
+	inset: 0;
+	background: rgb(0 0 0 / 55%);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 16px;
+	padding-top: calc(16px + env(safe-area-inset-top));
+	padding-bottom: calc(16px + env(safe-area-inset-bottom));
+	box-sizing: border-box;
+	z-index: 100;
+}
+
+.modal {
+	background: #fff;
+	border-radius: 10px;
+	padding: 16px;
+	width: 100%;
+	max-width: 460px;
+	max-height: 100%;
+	overflow-y: auto;
+	box-sizing: border-box;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.modal h3 { margin: 0; font-size: 17px; }
+
+.modalHelp, .modalStatus {
+	margin: 0;
+	font-size: 13px;
+	line-height: 1.4;
+	color: #444;
+}
+
+.modalStatus:empty { display: none; }
+.modalStatus.error { color: #b00020; }
+.modalStatus.ok { color: #1d7a1d; }
+
+#modalText {
+	width: 100%;
+	min-height: 140px;
+	box-sizing: border-box;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 12px;
+	border: 1px solid #a6a6a6;
+	border-radius: 5px;
+	padding: 8px;
+	resize: vertical;
+}
+
+.modalButtons {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.modalButtons button {
+	flex: 1 1 auto;
+	min-height: 40px;
+	padding: 0 12px;
+	font-size: 14px;
+}
+
+.modalPrimary { background-color: #4CBB17; font-weight: 600; }
+
+@media (hover: none) {
+	.modalPrimary:hover { background-color: #4CBB17; color: black; }
+}
+
+/* --- standalone-only tweaks ---------------------------------------------- */
+
+@media all and (display-mode: standalone) {
+	/* No browser chrome to scroll away, so reclaim the space it used to take. */
+	h1 { padding-top: calc(8px + env(safe-area-inset-top)); }
+	.installHint { display: none !important; }
+}
+
+@media all and (display-mode: browser) {
+	h1 { padding-top: 15px; }
+}
+
+/* Must come last. .installHint and .modalBackdrop both set `display`, and the
+   bare `.hidden` rule earlier in this file has the same specificity, so on
+   source order alone it would lose and both would render on load. Two classes
+   beat one, no !important needed. */
+.installHint.hidden,
+.modalBackdrop.hidden {
+	display: none;
+}
